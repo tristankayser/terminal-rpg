@@ -23,19 +23,21 @@ WASD_MAP = {
 }
 
 # 8-dir numpad layout (7=NW 8=N 9=NE / 4=W 6=E / 1=SW 2=S 3=SE)
-# plus vi-keys
+# Digits only — vi-keys (hjklyubn) used to shadow the J/B/N commands
+# (journal, base, party) so those menus were unreachable in this mode.
 NUMPAD_MAP = {
     '8':(0,-1),  '2':(0,1),   '4':(-1,0),  '6':(1,0),
     '7':(-1,-1), '9':(1,-1),  '1':(-1,1),  '3':(1,1),
-    'k':(0,-1),  'j':(0,1),   'h':(-1,0),  'l':(1,0),
-    'y':(-1,-1), 'u':(1,-1),  'b':(-1,1),  'n':(1,1),
-    'K':(0,-1),  'J':(0,1),   'H':(-1,0),  'L':(1,0),
-    'Y':(-1,-1), 'U':(1,-1),  'B':(-1,1),  'N':(1,1),
 }
 
 ARROW_MAP = {
     'arrow_up':(0,-1), 'arrow_down':(0,1),
     'arrow_left':(-1,0), 'arrow_right':(1,0),
+}
+
+DIAG_MAP = {
+    'diag_nw':(-1,-1), 'diag_ne':(1,-1),
+    'diag_sw':(-1,1),  'diag_se':(1,1),
 }
 
 CMD_MAP = {
@@ -101,15 +103,15 @@ def _getch():
     # ── Windows ──────────────────────────────────────────────────
     if os.name == 'nt':
         import msvcrt
-        ch = msvcrt.getch()
-        if ch in (b'\x00', b'\xe0'):   # special key prefix
-            ch2 = msvcrt.getch()
+        ch = msvcrt.getwch()
+        if ch in ('\x00', '\xe0'):     # special key prefix
+            ch2 = msvcrt.getwch()
+            # Numpad with NumLock off: Home/PgUp/End/PgDn act as diagonals
             return {'H':'arrow_up','P':'arrow_down',
-                    'M':'arrow_right','K':'arrow_left'}.get(ch2.decode('latin-1','replace'), '')
-        try:
-            return ch.decode('utf-8')
-        except Exception:
-            return ''
+                    'M':'arrow_right','K':'arrow_left',
+                    'G':'diag_nw','I':'diag_ne',
+                    'O':'diag_sw','Q':'diag_se'}.get(ch2, '')
+        return ch
 
     # ── Unix / Mac — try /dev/tty first ──────────────────────────
     try:
@@ -201,6 +203,11 @@ class InputHandler:
         # Arrow keys (returned as strings by _getch)
         if key in ARROW_MAP:
             dx, dy = ARROW_MAP[key]
+            return ('move', dx, dy)
+        if key in DIAG_MAP:
+            if self.mode == 'wasd':
+                return ('none',)
+            dx, dy = DIAG_MAP[key]
             return ('move', dx, dy)
 
         # Movement keys

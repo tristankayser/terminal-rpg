@@ -15,7 +15,33 @@ Usage:
     H()                       # current terminal height
 """
 
-import os, shutil
+import os, sys, shutil
+
+# ── Windows: enable ANSI / VT escape processing ─────────────────
+# Every screen in the game uses 24-bit colour escape codes. Classic
+# Windows consoles only interpret them once VT processing is switched
+# on for the console handle.
+def _enable_vt():
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.GetStdHandle(-11)          # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(h, ctypes.byref(mode)):
+            k32.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except Exception:
+        os.system("")   # well-known fallback that also enables VT mode
+
+_enable_vt()
+
+# Make sure box-drawing / emoji output never crashes on legacy code pages
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
 
 # ── Size detection ──────────────────────────────────────────────
 def _sz():
@@ -92,7 +118,26 @@ def div(char: str = "─", colour: str = _DIM, width: int = 0) -> str:
 
 # ── Clear ───────────────────────────────────────────────────────
 def clr():
-    os.system("cls" if os.name == "nt" else "clear")
+    """Clear the screen with ANSI codes (much faster than spawning cls/clear)."""
+    sys.stdout.write("\033[H\033[2J\033[3J")
+    sys.stdout.flush()
+
+def home():
+    """Move the cursor to the top-left without clearing (flicker-free redraws)."""
+    sys.stdout.write("\033[H")
+
+def draw_frame(lines, end_cursor=""):
+    """
+    Redraw a whole screen in one write: cursor home, each line followed by
+    erase-to-end-of-line, then erase everything below. No flicker.
+    """
+    out = ["\033[H"]
+    for ln in lines:
+        out.append(ln + "\033[K\n")
+    out.append("\033[J")
+    out.append(end_cursor)
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
 
 
 # ── Box drawing ─────────────────────────────────────────────────

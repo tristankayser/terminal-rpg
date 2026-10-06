@@ -103,7 +103,15 @@ class Mine:
     }
 
     def render(self, player, ore_count, gold_mined):
-        clr()
+        """Flicker-free: build the frame, then overwrite the screen in one go."""
+        import io, contextlib
+        from game_term import draw_frame
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._render_body(player, ore_count, gold_mined)
+        draw_frame(buf.getvalue().split("\n"))
+
+    def _render_body(self, player, ore_count, gold_mined):
         cols = W()
         # Align map rows with all other C()-centred content (same as _pad())
         from game_term import _pad
@@ -161,8 +169,9 @@ class Mine:
         self.px, self.py = nx, ny
         if ch == "O": return "ore"
         if ch == "E": return "exit"
-        if random.random() < 0.04 * self.danger: return "cave_in"
-        if random.random() < 0.06 + self.danger*0.02: return "encounter"
+        # (was 4%×danger cave-ins + 12% fights per step — up to 1 event in 4 steps)
+        if random.random() < 0.012 * self.danger: return "cave_in"
+        if random.random() < 0.04 + self.danger*0.015: return "encounter"
         return "moved"
 
     def mine_ore(self):
@@ -195,14 +204,14 @@ class Mine:
             # ── Commands ─────────────────────────────────────────
             if action[0] == "cmd":
                 cmd = action[1]
-                if cmd in ("quit", "save"):
+                if cmd == "quit" or (cmd == "enter" and self.grid[self.py][self.px] == "E"):
                     self.msg = f"{_DIM}You climb out of the mine.{_R}"
                     self.render(player, ore_count, gold_mined)
                     import time; time.sleep(0.5)
                     return gold_mined
                 elif cmd == "inventory":
-                    from main import _quick_inventory
-                    _quick_inventory(player)
+                    from game_player import quick_inventory
+                    quick_inventory(player)
                 elif cmd == "codex":
                     from game_codex import open_encyclopedia
                     open_encyclopedia(player)
@@ -236,11 +245,12 @@ class Mine:
                         gold_val    = random.randint(8, 25)
                         gold_mined += gold_val
                         player.gold += gold_val
-                        if ore in ITEM_POOL:
-                            player.add_item(ITEM_POOL[ore]())
-                        else:
-                            player.add_item(Item(ore, "material", 0, 15))
-                        self.msg = f"{_GOLD}★ Mined {_WHITE}{ore}{_GOLD}!  +{gold_val}g{_R}"
+                        import io, contextlib
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            ok = player.add_item(ITEM_POOL[ore]() if ore in ITEM_POOL
+                                                 else Item(ore, "material", 0, 15))
+                        self.msg = (f"{_GOLD}★ Mined {_WHITE}{ore}{_GOLD}!  +{gold_val}g{_R}" if ok else
+                                    f"{_GOLD}+{gold_val}g{_R}  {_RED}(bag full — {ore} left behind){_R}")
                     else:
                         self.msg = f"{_DIM}Already depleted.{_R}"
 
@@ -263,7 +273,8 @@ class Mine:
                     outcome = run_combat(player, e)
                     if outcome == "defeat":
                         return gold_mined
-                    self.msg = f"{_GREEN}Enemy defeated! Keep mining.{_R}"
+                    self.msg = (f"{_DIM}You escaped the {e.name}.{_R}" if outcome == "escaped"
+                                else f"{_GREEN}Enemy defeated! Keep mining.{_R}")
 
                 elif result == "exit":
                     self.msg = f"{_GREEN}You exit the mine.  Ore: {ore_count}  Gold earned: {gold_mined}g{_R}"

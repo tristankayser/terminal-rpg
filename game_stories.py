@@ -62,8 +62,8 @@ MAIN_STORIES = {
             {
                 "id": "dc_3",
                 "title": "Find the Dragon Cave",
-                "desc": "Explore the Iron Peaks continent and find the Dragon Cave entrance.",
-                "type": "visit", "target": "dragon_cave", "required": 1,
+                "desc": "Explore the Ironspire peaks and find the Dragon Cave entrance [V].",
+                "type": "visit", "target": "Vaeltharion's Lair", "required": 1,
                 "reward_gold": 200, "reward_exp": 300,
                 "completion_text": "The cave reeks of sulphur. Claw marks the size of a man scar the stone. You steel yourself.",
             },
@@ -399,8 +399,8 @@ class StoryManager:
 
     # ── Display ──────────────────────────────────────────────────
 
-    def show_journal(self):
-        import os
+    def show_journal(self, player=None):
+        clr()
         print(C(f"\n{_GOLD}{_B}════  STORY JOURNAL  ════{_R}\n"))
 
         # Main story
@@ -440,6 +440,26 @@ class StoryManager:
         if not story and not self.side_stories:
             print(C(f"{_DIM}No active stories. Explore the world to discover them.{_R}"))
 
+        # Guild / class / legendary quests in one place
+        if player is not None:
+            if player.active_quests:
+                print(C(f"\n{_CYAN}{_B}GUILD QUESTS:{_R}"))
+                for q in player.active_quests:
+                    prog = q.get("progress", 0); req = q.get("required", 1)
+                    done = f"  {_GREEN}✓ turn in at a Quest Board{_R}" if prog >= req else ""
+                    print(C(f"  {_WHITE}{q['title']}{_R}  {_GOLD}{min(prog,req)}/{req}{_R}{done}"))
+            eq = getattr(player, "evolution_quest", None)
+            if eq and not eq.get("done"):
+                prog = eq.get("progress", 0); req = eq.get("required", 1)
+                done = f"  {_GREEN}✓ turn in at a Quest Board{_R}" if prog >= req else ""
+                print(C(f"\n{_ORAN}{_B}CLASS QUEST:{_R} {_WHITE}{eq['title']}{_R}  {_GOLD}{min(prog,req)}/{req}{_R}{done}"))
+                print(C(f"  {_DIM}{eq['desc']}{_R}"))
+            lq = getattr(player, "_legendary_quest", None)
+            if lq:
+                print(C(f"\n{_GOLD}{_B}LEGENDARY QUEST:{_R} {_WHITE}{lq['title']}{_R}"))
+                for st in lq.get("steps", []):
+                    print(C(f"  {_DIM}{st['label']}:{_R} {_GOLD}{st['progress']}/{st['required']}{_R}"))
+
         input(C(f"\n{_DIM}(Press Enter){_R}"))
 
     # ── Serialise ────────────────────────────────────────────────
@@ -468,7 +488,7 @@ class StoryManager:
 
 def story_selection_screen():
     """Show story selection at character creation. Returns story_id."""
-    import os; os.system("cls" if os.name == "nt" else "clear")
+    clr()
     print(C(f"\n{_GOLD}{_B}════  CHOOSE YOUR MAIN STORY  ════{_R}\n"))
     print(C(f"{_DIM}Side stories will be discovered as you explore.{_R}\n"))
 
@@ -497,7 +517,7 @@ def story_selection_screen():
 
 def show_story_completion(story_type, step):
     """Show a dramatic story step completion message."""
-    import os; os.system("cls" if os.name == "nt" else "clear")
+    clr()
     if story_type == "main":
         print(C(f"\n{_GOLD}{_B}╔══════════════════════════════════════════╗"))
         print(C(f"║  ★  STORY STEP COMPLETE                  ║"))

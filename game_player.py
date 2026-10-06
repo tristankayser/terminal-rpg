@@ -15,9 +15,16 @@ def _hpb(c,m,w=16):
 def _mpb(c,m,w=10):
     f=c/m if m else 0; fi=int(w*f)
     return f"{_BLUE}{chr(9608)*fi}{_DIM}{chr(9617)*(w-fi)}{_R} {_BLUE}{c}/{m}{_R}"
-def _clr(): import os
 from game_lang import T, set_language, LANG, LANGUAGE_NAMES
-def _div(w=52): return f"  {_DIM}{"-"*w}{_R}"
+def _div(w=52): return f"  {_DIM}{'-'*w}{_R}"
+
+# Guild faction perks (joined at the Adventurers Guild)
+CLAN_PERKS = {
+    "Iron Fist":      {"def": 5, "atk": 3},
+    "Shadow Weavers": {"dodge": 8, "crit": 5},
+    "Silver Dragons": {"mp": 20, "skill": 4},
+    "Holy Order":     {"heal": 10, "def": 3},
+}
 
 SAVE_FILE = "savegame.json"
 
@@ -85,8 +92,15 @@ class Player:
         self.exp_to_next= 50
         self.gold       = 100
         self.rank       = "F"
-        self.clan       = None
+        self.clan       = None     # guild faction name (str) — see CLAN_PERKS
+        self.owned_clan = None     # game_party.Clan the player founded
         self.title      = None
+        self.temp_atk_buff  = 0
+        self.temp_atk_turns = 0
+        self._crit_bonus_custom = 0
+        self._gold_bonus_kill   = 0
+        self._potion_bonus      = 0
+        self._legendary_quest   = None
 
         self.skills     = list(self.job.skills)  # copy
         self.status_effects = []
@@ -143,32 +157,57 @@ class Player:
     def is_alive(self):
         return self.hp > 0
 
+    def clan_perk(self, key):
+        return CLAN_PERKS.get(self.clan or "", {}).get(key, 0)
+
+    def trophy_bonus(self):
+        """Best (atk, def) trophy-wall bonus across all bases."""
+        best = (0, 0)
+        if hasattr(self, "bases"):
+            for b in self.bases.bases.values():
+                tb = b.trophy_bonus()
+                if sum(tb) > sum(best):
+                    best = tb
+        return best
+
+    def combat_def(self):
+        """Defense used when taking hits (gear is already baked into self.defense)."""
+        return (self.defense + self.party_def_bonus()
+                + self.trophy_bonus()[1] + self.clan_perk("def"))
+
+    def combat_atk(self):
+        """Attack used when dealing hits (gear is already baked into self.atk)."""
+        return self.atk + self.get_equip_atk_bonus()
+
+    def heal_power_extra(self):
+        return self.party_heal_bonus() + self.clan_perk("heal")
+
     def take_damage(self, dmg):
-        actual = max(1, dmg - self.defense // 3)
+        actual = max(1, dmg - self.combat_def() // 3)
         self.hp = max(0, self.hp - actual)
+        self._damage_this_battle = getattr(self, "_damage_this_battle", 0) + actual
         from game_customise import tick_legendary_quest as _tlq
         _tlq(self,"damage_taken",actual)
         return actual
 
     def try_dodge(self):
-        return random.randint(1, 100) <= (self.job.dodge_bonus + self.level // 2)
+        return random.randint(1, 100) <= (self.job.dodge_bonus + self.level // 2
+                                          + self.clan_perk("dodge"))
 
     def calc_crit(self, base_damage):
         crit_chance = (self.job.crit_bonus + self.level // 3
-                       + getattr(self, "_crit_bonus_custom", 0))
+                       + getattr(self, "_crit_bonus_custom", 0)
+                       + self.clan_perk("crit"))
         if random.randint(1, 100) <= crit_chance:
             return True, int(base_damage * 1.75)
         return False, base_damage
 
     # ── STEALTH ──────────────────────────────────────────────
     def get_stealth(self):
-        """Total stealth score including equipment and party bonuses."""
-        bonus = 0
-        for eq in self.equipped.values():
-            if eq and hasattr(eq, "stealth_bonus"):
-                bonus += eq.stealth_bonus
+        """Total stealth score. Equipment stealth is already baked into
+        self.stealth when gear is equipped (it was counted twice before)."""
         party_bonus = self.party.total_stealth_bonus() if hasattr(self,"party") else 0
-        return self.stealth + bonus + party_bonus
+        return max(0, self.stealth + party_bonus)
 
     def party_atk_bonus(self):
         return self.party.total_atk_bonus() if hasattr(self,"party") else 0
@@ -180,7 +219,8 @@ class Player:
         return self.party.total_heal_bonus() if hasattr(self,"party") else 0
 
     def party_skill_power(self):
-        return self.party.total_skill_power() if hasattr(self,"party") else 0
+        base = self.party.total_skill_power() if hasattr(self,"party") else 0
+        return base + self.clan_perk("skill")
 
     def stealth_first_strike(self, base_damage):
         """If attacking from stealth, deal 1.5x damage and print message."""
@@ -200,8 +240,15 @@ class Player:
         Called when an enemy would trigger an encounter.
         Returns True if stealth lets you slip past silently.
         """
-        evade_chance = max(5, self.get_stealth() * 4)   # 5–60%
-        return random.randint(1, 100) <= evade_chance
+        evade_chance = min(60, max(5, self.get_stealth() * 4))   # 5–60%
+        if random.randint(1, 100) <= evade_chance:
+            # Slipping past an enemy leaves you hidden for a few steps —
+            # the next fight in that window opens with a SNEAK ATTACK.
+            # (Nothing ever set in_stealth before, so sneak attacks never fired.)
+            self.in_stealth = True
+            self.stealth_turns = 4
+            return True
+        return False
 
     def tick_stealth(self):
         """Called every move step. Stealth fades after a few turns."""
@@ -212,15 +259,33 @@ class Player:
 
     def defend(self):
         bonus = 8 + self.job.defend_bonus // 2
-        old = self.defense
         self.defense += bonus
         print(C(f"[{self.name} defends! DEF temporarily +{bonus}]"))
         return bonus
 
     def get_equip_atk_bonus(self):
-        from game_items import Equipment as _Eq
-        eq_bonus = sum(e.atk_bonus for e in self.equipped.values() if isinstance(e,_Eq))
-        return eq_bonus + self.party_atk_bonus()
+        """Extra ATK on top of self.atk: party, trophies, clan, temporary buffs.
+        (Equipment ATK is already baked into self.atk when equipped — it used
+        to be added a second time here.)"""
+        buff = self.temp_atk_buff if getattr(self, "temp_atk_turns", 0) > 0 else 0
+        return (self.party_atk_bonus() + self.trophy_bonus()[0]
+                + self.clan_perk("atk") + buff)
+
+    def tick_buffs(self):
+        """Called once per combat round."""
+        if getattr(self, "temp_atk_turns", 0) > 0:
+            self.temp_atk_turns -= 1
+            if self.temp_atk_turns <= 0:
+                self.temp_atk_buff = 0
+                print(C(f"[Your strength buff wears off.]"))
+
+    def join_clan(self, clan_name):
+        """Join a guild faction, swapping the MP perk cleanly."""
+        old_mp = self.clan_perk("mp")
+        self.clan = clan_name
+        new_mp = self.clan_perk("mp")
+        self.max_mp += new_mp - old_mp
+        self.mp = min(self.mp, self.max_mp)
 
     def get_equip_def_bonus(self):
         from game_items import Equipment as _Eq
@@ -257,9 +322,11 @@ class Player:
         Sets god_immunity_turns=30 so the world map skips encounters for 30 moves.
         Returns True if triggered."""
         if self.hp <= 0:
-            for i, item in enumerate(self.inventory):
+            from game_items import remove_items
+            for item in self.inventory:
                 if item.item_type == "god":
-                    self.inventory.pop(i)
+                    # Consume ONE potion (used to delete the whole stack)
+                    remove_items(self.inventory, item.name, 1)
                     self.hp = max(5, self.max_hp // 5)
                     self.mp = min(self.max_mp, self.mp + self.max_mp // 2)
                     self.status_effects.clear()
@@ -280,7 +347,8 @@ class Player:
         while self.exp >= self.exp_to_next:
             self.exp -= self.exp_to_next
             self.level += 1
-            self.exp_to_next = int(self.exp_to_next * 1.4)
+            # Gentler curve than the old x1.4 (which needed ~170 kills per level by Lv 20)
+            self.exp_to_next = int(self.exp_to_next * 1.25) + 10
 
             # Level-up stat growth varies by job
             hp_gain  = 15 + self.job.hp_bonus // 5
@@ -303,8 +371,12 @@ class Player:
     # ----------------------------------------------------------
 
     def add_item(self, item):
+        """Add to bag. Returns False (and tells the player) if the bag is full."""
         from game_items import inventory_add
-        inventory_add(self.inventory, item)
+        ok = inventory_add(self.inventory, item)
+        if not ok:
+            print(C(f"{_RED}Your bag is full — {item.name} was left behind.{_R}"))
+        return ok
 
     def show_inventory(self):
         if not self.inventory:
@@ -315,49 +387,101 @@ class Player:
         for i, it in enumerate(self.inventory, 1):
             vstr = str(it.value) if it.value else "-"
             it_col = _GOLD if it.item_type == "god" else _WHITE
-            print(C(f"{_GOLD}{i:<4}{_R} {it_col}{it.name:<26}{_R} {_DIM}{it.item_type:<12}{_R} {vstr}"))
+            print(C(f"{_GOLD}{i:<4}{_R} {it_col}{str(it):<26}{_R} {_DIM}{it.item_type:<12}{_R} {vstr}"))
+
+    USABLE_TYPES = ("heal", "mana", "antidote", "buff")
+
+    def usable_items(self, in_combat=False):
+        """[(index, entry)] of consumables usable right now."""
+        types = self.USABLE_TYPES + (("bomb",) if in_combat else ())
+        return [(i, it) for i, it in enumerate(self.inventory) if it.item_type in types]
+
+    @staticmethod
+    def describe_consumable(it):
+        t = it.item_type
+        if t == "heal":     return f"+{it.value} HP"
+        if t == "mana":     return f"+{it.value} MP"
+        if t == "antidote": return "cures ailments"
+        if t == "buff":     return f"ATK+{it.value} for 3 turns"
+        if t == "bomb":     return "escape!" if it.name == "Smoke Bomb" else f"{it.value}+ dmg"
+        return ""
+
+    def pick_consumable(self, in_combat=False):
+        """Show consumables, return chosen inventory index or None."""
+        usable = self.usable_items(in_combat)
+        if not usable:
+            print(C(f"{_DIM}No usable items.{_R}"))
+            input(C(f"{_DIM}(Press Enter){_R}"))
+            return None
+        print(C(f"\n{_CYAN}{_B}── USE ITEM ──{_R}"))
+        for num, (i, it) in enumerate(usable, 1):
+            print(C(f"{_GOLD}[{num}]{_R} {_WHITE}{str(it):<24}{_R} {_DIM}{self.describe_consumable(it)}{_R}"))
+        print(C(f"{_GOLD}[0]{_R} {_DIM}Cancel{_R}"))
+        ch = input(C(f"{_GOLD}>{_R} ")).strip()
+        if not ch.isdigit() or not (1 <= int(ch) <= len(usable)):
+            return None
+        return usable[int(ch) - 1][0]
 
     def use_inventory_item(self):
-        usable = [(i, it) for i, it in enumerate(self.inventory)
-                  if it.item_type in ("heal", "mana")]
-        if not usable:
-            print(C("No usable items."))
+        """Out-of-combat item use. Returns True if something was consumed."""
+        from game_items import use_entry
+        idx = self.pick_consumable(in_combat=False)
+        if idx is None:
             return False
+        ok = use_entry(self.inventory, idx, self)
+        input(C(f"{_DIM}(Press Enter){_R}"))
+        return ok
 
-        print(C("\n--- Use Item ---"))
-        for num, (i, it) in enumerate(usable, 1):
-            vstr = f"+{it.value}" if it.item_type == "heal" else f"+{it.value} MP"
-            print(C(f"{num}. {it.name} ({vstr})"))
-        print(C(f"{len(usable)+1}. Cancel"))
+    # ── Equipment ─────────────────────────────────────────────
 
-        try:
-            choice = int(input(C("> ")))
-        except ValueError:
-            return False
+    def _apply_gear(self, item, sign):
+        self.max_hp  += sign * item.hp_bonus
+        self.max_mp  += sign * item.mp_bonus
+        self.atk     += sign * item.atk_bonus
+        self.defense += sign * getattr(item, 'def_bonus', 0)
+        self.stealth += sign * getattr(item, 'stealth_bonus', 0)
+        self.hp = min(self.hp, self.max_hp)
+        self.mp = min(self.mp, self.max_mp)
 
-        if choice == len(usable) + 1:
-            return False
-        if not (1 <= choice <= len(usable)):
-            print(C("Invalid."))
-            return False
+    def equip(self, item):
+        """Equip an Equipment that is in the bag. Returns (ok, message)."""
+        ac = getattr(item, 'allowed_classes', None)
+        if ac and self.job.name not in ac:
+            return False, f"Cannot equip — requires: {', '.join(ac)}"
+        if item.slot not in self.equipped:
+            return False, f"{item.name} has an unknown slot ({item.slot})."
+        old = self.equipped.get(item.slot)
+        self.inventory.remove(item)
+        if old:
+            self._apply_gear(old, -1)
+            self.inventory.append(old)
+        self.equipped[item.slot] = item
+        self._apply_gear(item, +1)
+        swap = f" (swapped out {old.name})" if old else ""
+        return True, f"Equipped {item.name}{swap}!  {item.stat_line()}"
 
-        idx, item = usable[choice - 1]
-        result = item.use(self)
-        if result:
-            self.inventory.pop(idx)
-            # Track healer quest
-            if item.name in ("Holy Light", "Mend"):
-                self._tick_evolution_quest("heal_skill")
-        return result
+    def unequip(self, slot):
+        """Move equipped gear back to the bag. Returns (ok, message)."""
+        from game_items import INVENTORY_LIMIT
+        item = self.equipped.get(slot)
+        if not item:
+            return False, "Nothing equipped there."
+        if len(self.inventory) >= INVENTORY_LIMIT:
+            return False, "Your bag is full."
+        self._apply_gear(item, -1)
+        self.equipped[slot] = None
+        self.inventory.append(item)
+        return True, f"Unequipped {item.name}."
 
     def equip_item(self):
         from game_items import Equipment as _Eq
-        equippable = [(i,it) for i,it in enumerate(self.inventory) if isinstance(it,_Eq)]
-        if not equippable:
-            print(C(f"\n{_DIM}No equipment in bag.{_R}")); return
         while True:
+            equippable = [it for it in self.inventory if isinstance(it, _Eq)]
+            if not equippable:
+                print(C(f"\n{_DIM}No equipment in bag.{_R}"))
+                input(C(f"{_DIM}(Press Enter){_R}")); return
             print(C(f"\n{_CYAN}{_B}── EQUIP ──{_R}"))
-            for num,(i,it) in enumerate(equippable,1):
+            for num, it in enumerate(equippable, 1):
                 ac = getattr(it,'allowed_classes',None)
                 ok_cls = (ac is None or self.job.name in ac)
                 rcol = it.rarity_col() if hasattr(it,'rarity_col') else _WHITE
@@ -366,38 +490,34 @@ class Player:
                 curr_note = f"  {_DIM}(replaces {curr.name}){_R}" if curr else ""
                 print(C(f"  {_GOLD}[{num}]{_R} {rcol}{it.name:<22}{_R}  {_DIM}[{it.slot}]{_R}  {_DIM}{it.stat_line()}{_R}{cls_note}{curr_note}"))
             print(C(f"  {_GOLD}[0]{_R}{_DIM} Cancel{_R}"))
-            try: choice = int(input(C(f"\n{_GOLD}>{_R} Equip # ")))
-            except ValueError: break
-            if choice == 0: break
-            if not (1 <= choice <= len(equippable)): print(C(f"{_RED}Invalid.{_R}")); continue
-            _, item = equippable[choice-1]
-            # Class check
-            ac = getattr(item,'allowed_classes',None)
-            if ac and self.job.name not in ac:
-                allowed = ', '.join(ac)
-                print(C(f"\n{_RED}Cannot equip — requires: {allowed}{_R}"))
-                input(C(f"{_DIM}(Press Enter){_R}")); continue
-            # Swap out old
-            old = self.equipped.get(item.slot)
-            if old:
-                self.inventory.append(old)
-                self.max_hp  -= old.hp_bonus
-                self.max_mp  -= old.mp_bonus
-                self.atk     -= old.atk_bonus
-                self.defense -= getattr(old,'def_bonus',0)
-                self.stealth -= getattr(old,'stealth_bonus',0)
-            # Equip new
-            self.equipped[item.slot] = item
-            self.inventory.remove(item)
-            self.max_hp  += item.hp_bonus
-            self.max_mp  += item.mp_bonus
-            self.atk     += item.atk_bonus
-            self.defense += getattr(item,'def_bonus',0)
-            self.stealth += getattr(item,'stealth_bonus',0)
-            self.hp = min(self.hp, self.max_hp)
-            print(C(f"\n{_GREEN}Equipped {item.name}!  {_DIM}{item.stat_line()}{_R}"))
+            ch = input(C(f"\n{_GOLD}>{_R} Equip # ")).strip()
+            if not ch.isdigit() or ch == "0":
+                return
+            choice = int(ch)
+            if not (1 <= choice <= len(equippable)):
+                print(C(f"{_RED}Invalid.{_R}")); continue
+            ok, msg = self.equip(equippable[choice-1])
+            print(C(f"\n{_GREEN if ok else _RED}{msg}{_R}"))
             input(C(f"{_DIM}(Press Enter){_R}"))
-            break
+            if ok:
+                return
+
+    def unequip_item(self):
+        slots = [s for s, it in self.equipped.items() if it]
+        if not slots:
+            print(C(f"\n{_DIM}Nothing equipped.{_R}"))
+            input(C(f"{_DIM}(Press Enter){_R}")); return
+        print(C(f"\n{_CYAN}{_B}── UNEQUIP ──{_R}"))
+        for num, s in enumerate(slots, 1):
+            it = self.equipped[s]
+            print(C(f"  {_GOLD}[{num}]{_R} {_DIM}{s:<7}{_R} {_WHITE}{it.name:<22}{_R} {_DIM}{it.stat_line()}{_R}"))
+        print(C(f"  {_GOLD}[0]{_R}{_DIM} Cancel{_R}"))
+        ch = input(C(f"\n{_GOLD}>{_R} ")).strip()
+        if ch.isdigit() and 1 <= int(ch) <= len(slots):
+            ok, msg = self.unequip(slots[int(ch)-1])
+            print(C(f"\n{_GREEN if ok else _RED}{msg}{_R}"))
+            input(C(f"{_DIM}(Press Enter){_R}"))
+
     # ----------------------------------------------------------
     # QUESTS
     # ----------------------------------------------------------
@@ -433,10 +553,11 @@ class Player:
             print(C(f"[CLASS QUEST] {self.evolution_quest['title']}: {p}/{r}"))
 
     def _tick_evolution_quest(self, quest_type):
-        if (self.evolution_quest
-                and not self.evolution_quest.get("done")
-                and self.evolution_quest.get("type") == quest_type):
-            self.evolution_quest["progress"] += 1
+        q = self.evolution_quest
+        if (q and not q.get("done") and q.get("type") == quest_type
+                and q["progress"] < q["required"]):
+            q["progress"] += 1
+            print(C(f"{_ORAN}[CLASS QUEST] {q['title']}: {q['progress']}/{q['required']}{_R}"))
 
     def turn_in_quests(self):
         earned_gold = 0
@@ -472,7 +593,7 @@ class Player:
             self.gold += g
             self.gain_exp(e)
             print(C(f"\n*** CLASS QUEST COMPLETE: {self.evolution_quest['title']} ***"))
-            print(C(f"You are ready to awaken! Visit a trainer NPC to evolve your class."))
+            print(C(f"You are ready to awaken! Visit the Adventurers Guild to evolve your class."))
             print(C(f"Rewards: +{g} gold, +{e} EXP"))
 
     def start_evolution_quest(self):
@@ -504,6 +625,14 @@ class Player:
             return False
         old = self.job.name
         new = self.job.evolution
+        old_stealth = getattr(self.job, "stealth_bonus", 0)
+        # The class style perk belongs to the old class — refund it first
+        if getattr(self, "_custom_style_id", None):
+            from game_customise import revert_style
+            revert_style(self)
+            self._custom_style_id = None
+            self._custom_style_label = None
+            self._custom_perk_delta = {}
         from game_jobs import create_job
         self.job     = create_job(new)
         self.skills  = list(self.job.skills)
@@ -514,13 +643,15 @@ class Player:
         self.max_mp  += self.job.mp_bonus
         self.atk     += self.job.atk_bonus
         self.defense += self.job.defend_bonus
+        self.stealth += getattr(self.job, "stealth_bonus", 0) - old_stealth
         self.hp = self.max_hp
         self.mp = self.max_mp
 
-        print(C(f"\n*** AWAKENING! {self.name} evolves from {old} to {new}! ***"))
+        print(C(f"\n{_GOLD}{_B}*** AWAKENING! {self.name} evolves from {old} to {new}! ***{_R}"))
         print(C(f"New skills unlocked!"))
         for sk in self.skills:
             print(C(f"  -> {sk}"))
+        print(C(f"{_DIM}(Pick a new style for your class in any town's Customise menu.){_R}"))
         return True
 
     # ----------------------------------------------------------
@@ -551,48 +682,58 @@ class Player:
     # ----------------------------------------------------------
 
     def show_status(self):
-        try:
-            from game_art import print_sprite
-            print_sprite(self.job.name, label=f"{self.name} — {self.job.name}")
-        except Exception:
-            pass
-        effects   = ", ".join(str(e) for e in self.status_effects) or "None"
+        from game_art import render_sprite, sprite_width, player_look
+        from game_term import _vis
+        acc, leg = player_look(self)
+        art = render_sprite(self.job.name, acc, leg)
+        aw = sprite_width(self.job.name)
         evo_tag   = f" {_YELL}{_B}★ READY TO AWAKEN!{_R}" if self.can_awaken() else ""
         RANK_COL  = {"S":_GOLD,"SS":_GOLD,"SSS":_GOLD,"Legend":_ORAN,"A":_CYAN,"B":_GREEN}
         rc        = RANK_COL.get(self.rank, _WHITE)
+        crit = (self.job.crit_bonus + self.level//3 + getattr(self,'_crit_bonus_custom',0)
+                + self.clan_perk('crit'))
+        style = getattr(self, "_custom_style_label", None)
+        stats = [
+            f"{_WHITE}{_B}{self.name}{_R}  {_PURP}{self.job.name}{_R}{evo_tag}",
+            f"{_DIM}Level{_R} {_YELL}{_B}{self.level}{_R}   {_DIM}EXP{_R} {_CYAN}{self.exp}/{self.exp_to_next}{_R}",
+            f"{_DIM}Rank{_R}  {rc}{_B}{self.rank}{_R}    {_DIM}Gold{_R} {_GOLD}{self.gold}{_R}",
+            f"{_DIM}Guild{_R} {_CYAN}{self.clan or '—'}{_R}"
+            + (f"   {_DIM}Clan{_R} {_CYAN}{self.owned_clan.name}{_R}" if getattr(self, 'owned_clan', None) else ""),
+            "",
+            f"{_DIM}HP {_R}{_hpb(self.hp, self.max_hp)}",
+            f"{_DIM}MP {_R}{_mpb(self.mp, self.max_mp)}",
+            f"{_DIM}ATK{_R} {_RED}{_B}{self.combat_atk():<4}{_R} {_DIM}DEF{_R} {_BLUE}{_B}{self.combat_def():<4}{_R}"
+            f" {_DIM}STL{_R} {_PURP}{_B}{self.get_stealth():<3}{_R} {_DIM}CRIT{_R} {_ORAN}{_B}{crit}%{_R}",
+            f"{_DIM}Style{_R} {_GOLD}{style or 'Default'}{_R}",
+        ]
         print()
-        print(C(f"{_CYAN}{_B}════  CHARACTER STATUS  ════{_R}"))
+        print(C(f"{_CYAN}{_B}══════════  CHARACTER STATUS  ══════════{_R}"))
         print()
-        print(C(f"{_DIM}Name  :{_R} {_WHITE}{_B}{self.name}{_R}"))
-        print(C(f"{_DIM}Class :{_R} {_PURP}{self.job.name}{_R}{evo_tag}"))
-        print(C(f"{_DIM}Level :{_R} {_YELL}{self.level}{_R}   {_DIM}EXP{_R} {_CYAN}{self.exp}/{self.exp_to_next}{_R}"))
-        print(C(f"{_DIM}Rank  :{_R} {rc}{_B}{self.rank}{_R}   {_DIM}Clan:{_R} {_CYAN}{self.clan or 'None'}{_R}"))
-        print(C(f"{_DIM}Gold  :{_R} {_GOLD}{self.gold}{_R}"))
-        print(C(f"{_DIM}{'-'*40}{_R}"))
-        print(C(f"{_DIM}HP    :{_R} {_hpb(self.hp, self.max_hp)}"))
-        print(C(f"{_DIM}MP    :{_R} {_mpb(self.mp, self.max_mp)}"))
-        print(C(f"{_DIM}ATK   :{_R} {_RED}{self.atk}{_R}   {_DIM}DEF:{_R} {_BLUE}{self.defense}{_R}   {_DIM}STL:{_R} {_PURP}{self.get_stealth()}{_R}"))
-        print(C(f"{_DIM}{'-'*40}{_R}"))
+        h = max(len(art), len(stats))
+        art = [" " * aw] * ((h - len(art)) // 2) + art
+        for i in range(h):
+            left = art[i] if i < len(art) else " " * aw
+            right = stats[i] if i < len(stats) else ""
+            print(C(left + "   " + right))
+        print()
+        print(C(f"{_CYAN}{_B}EQUIPMENT{_R}  {_DIM}{'─'*40}{_R}"))
         SLOT_LABELS = {"weapon":"Weapon","armor":"Armor","helmet":"Helmet",
                        "shield":"Shield","cloak":"Cloak","ring":"Ring","amulet":"Amulet"}
         for sl, lb in SLOT_LABELS.items():
             eq = self.equipped.get(sl)
-            val = f"{_WHITE}{eq.name}{_R}  {_DIM}{eq.stat_line()}{_R}" if eq else f"{_DIM}—{_R}"
-            print(C(f"{_DIM}{lb:<7}:{_R} {val}"))
-        print(C(f"{_DIM}Status:{_R} {_YELL}{effects}{_R}"))
-        # Party summary
+            val = (f"{eq.rarity_col()}{eq.name}{_R}  {_DIM}{eq.stat_line()}{_R}" if eq
+                   else f"{_DIM}—{_R}")
+            print(C(f"{_DIM}{lb:<7}{_R} {val}"))
+        if self.status_effects:
+            print(C(f"{_DIM}Status {_R} {_YELL}{', '.join(str(e) for e in self.status_effects)}{_R}"))
         if hasattr(self,"party") and self.party.members:
-            print(C(f"\n{_CYAN}{_B}Party:{_R}"))
+            print(C(f"\n{_CYAN}{_B}PARTY{_R}  {_DIM}{'─'*40}{_R}"))
             for m in self.party.members:
-                print(m.status_line())
+                print(C(f"{m._col()}{m.name:<12}{_R} {_DIM}{m.role.title():<8} Lv{m.level}{_R}  "
+                        f"HP {m.hp_bar(12)}  {_DIM}ATK {m.atk}{_R}"))
 
     def to_dict(self):
-        # Temporarily remove active trait so stats are saved as BASE values
-        # from_dict will re-apply the trait on load (no double-stacking)
-        active = getattr(self, "active_trait", None)
-        if active:
-            from game_customise import _remove_trait as _rt
-            _rt(self, active)
+        oc = getattr(self, "owned_clan", None)
         result = {
             "name": self.name,
             "job":  self.job.name,
@@ -632,13 +773,17 @@ class Player:
             "custom_style_colour": getattr(self,"_custom_style_colour",None),
             "custom_sprite_tag":   getattr(self,"_custom_sprite_tag",None),
             "custom_perk_delta":   getattr(self,"_custom_perk_delta",{}),
+            # Perk values that live outside the core stats (were lost on load)
+            "crit_bonus_custom":   getattr(self,"_crit_bonus_custom",0),
+            "gold_bonus_kill":     getattr(self,"_gold_bonus_kill",0),
+            "potion_bonus":        getattr(self,"_potion_bonus",0),
+            "legendary_quest":     getattr(self,"_legendary_quest",None),
+            "temp_atk_buff":       getattr(self,"temp_atk_buff",0),
+            "temp_atk_turns":      getattr(self,"temp_atk_turns",0),
+            "owned_clan":          oc.to_dict() if oc else None,
 
             "guild_storage": self.guild_storage.to_dict() if hasattr(self,"guild_storage") else {"items":[]},
         }
-        # Re-apply trait so player object is restored after serialisation
-        if active:
-            from game_customise import _apply_trait as _at
-            _at(self, active)
         return result
 
     @classmethod
@@ -656,8 +801,20 @@ class Player:
         p.defense= d.get("defense", 5)
         p.gold   = d.get("gold", 100)
         p.rank   = d.get("rank", "F")
-        p.clan   = d.get("clan")
+        clan_raw = d.get("clan")
+        p.clan   = clan_raw if isinstance(clan_raw, str) else None
         p.title  = d.get("title")
+        from game_party import Clan
+        oc = d.get("owned_clan")
+        if oc is None and isinstance(clan_raw, dict):
+            oc = clan_raw            # very old saves stored the Clan here
+        p.owned_clan = Clan.from_dict(oc) if oc else None
+        p._crit_bonus_custom = d.get("crit_bonus_custom", 0)
+        p._gold_bonus_kill   = d.get("gold_bonus_kill", 0)
+        p._potion_bonus      = d.get("potion_bonus", 0)
+        p._legendary_quest   = d.get("legendary_quest")
+        p.temp_atk_buff      = d.get("temp_atk_buff", 0)
+        p.temp_atk_turns     = d.get("temp_atk_turns", 0)
         p.awakened = d.get("awakened", False)
         p.skills = list(p.job.skills)
 
@@ -702,19 +859,56 @@ class Player:
         p._custom_style_colour = d.get("custom_style_colour")
         p._custom_sprite_tag   = d.get("custom_sprite_tag", "")
         p._custom_perk_delta   = d.get("custom_perk_delta", {})
-        # Re-apply active trait bonuses (must be last — all stats must exist)
-        if p.active_trait:
-            from game_customise import _apply_trait
-            _apply_trait(p, p.active_trait)
+        # Old saves never stored the crit perk — recover it from the perk delta
+        if "crit_bonus_custom" not in d:
+            p._crit_bonus_custom = p._custom_perk_delta.get("_crit_bonus_custom", 0)
+            p._gold_bonus_kill   = p._custom_perk_delta.get("_gold_bonus_kill", 0)
+            p._potion_bonus      = p._custom_perk_delta.get("_potion_bonus", 0)
         return p
 
-    def save(self, filename=SAVE_FILE):
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
-        print(C(f"Game saved to {filename}."))
 
-    @classmethod
-    def load(cls, filename=SAVE_FILE):
-        with open(filename, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return cls.from_dict(data)
+# ══════════════════════════════════════════════════════════════
+# QUICK BAG — shared by the world map, dungeons and mines
+# ══════════════════════════════════════════════════════════════
+
+def quick_inventory(player):
+    """Compact bag screen: use consumables, equip / unequip gear."""
+    from game_items import use_entry, INVENTORY_LIMIT, Equipment
+    while True:
+        clr()
+        print(C(f"\n{_CYAN}{_B}════  QUICK BAG  ════{_R}  "
+                f"{_DIM}HP {player.hp}/{player.max_hp}  MP {player.mp}/{player.max_mp}  "
+                f"Gold {player.gold}  ({len(player.inventory)}/{INVENTORY_LIMIT} slots){_R}\n"))
+        if not player.inventory:
+            print(C(f"{_DIM}Your bag is empty.{_R}"))
+        for i, it in enumerate(player.inventory, 1):
+            if isinstance(it, Equipment):
+                col = it.rarity_col(); extra = f"{_DIM}[{it.slot}] {it.stat_line()}{_R}"
+            else:
+                col = (_GREEN if it.item_type == "heal" else _BLUE if it.item_type == "mana"
+                       else _GOLD if it.item_type == "god" else _DIM if it.item_type == "material"
+                       else _WHITE)
+                extra = f"{_DIM}{Player.describe_consumable(it) or it.item_type}{_R}"
+            print(C(f"{_GOLD}[{i:>2}]{_R} {col}{str(it):<26}{_R} {extra}"))
+        print(C(f"\n{_DIM}Type a number to use/equip that item.{_R}"))
+        print(C(f"{_GOLD}[U]{_R}{_DIM} Use item  {_R}{_GOLD}[E]{_R}{_DIM} Equip  {_R}"
+                f"{_GOLD}[R]{_R}{_DIM} Unequip  {_R}{_GOLD}[0]{_R}{_DIM} Close{_R}"))
+        ch = input(C(f"\n{_GOLD}>{_R} ")).strip().lower()
+        if ch in ("0", "q", ""):
+            return
+        if ch == "u":
+            player.use_inventory_item()
+        elif ch == "e":
+            player.equip_item()
+        elif ch == "r":
+            player.unequip_item()
+        elif ch.isdigit() and 1 <= int(ch) <= len(player.inventory):
+            it = player.inventory[int(ch) - 1]
+            if isinstance(it, Equipment):
+                ok, msg = player.equip(it)
+                print(C(f"{_GREEN if ok else _RED}{msg}{_R}"))
+            elif it.item_type in Player.USABLE_TYPES:
+                use_entry(player.inventory, int(ch) - 1, player)
+            else:
+                print(C(f"{_DIM}{it.name} can't be used here.{_R}"))
+            input(C(f"{_DIM}(Press Enter){_R}"))

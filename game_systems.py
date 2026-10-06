@@ -30,7 +30,7 @@ C_ORANGE = fg(220,140,40)
 C_PURPLE = fg(180,80,220)
 C_PINK   = fg(220,80,160)
 
-def clear(): os.system("cls" if os.name == "nt" else "clear")
+def clear(): clr()
 
 def divider(w=None, c=C_DIM):
     from game_term import _pad
@@ -78,187 +78,258 @@ def status_header(player):
 # COMBAT
 # ═══════════════════════════════════════════════════════════════
 
+def _capture(log, fn, *args, **kwargs):
+    """Run fn while capturing everything it prints into the combat log."""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        result = fn(*args, **kwargs)
+    for ln in buf.getvalue().splitlines():
+        if ln.strip():
+            log.append(ln.strip(" "))
+    return result
+
+
+def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note=""):
+    clear()
+    title = f"  ⚔  {'BOSS BATTLE' if is_boss else 'BATTLE'} · {enemy.name} · Round {rnd}  "
+    bw = max(len(title) + 8, 56)
+    side = (bw - len(title)) // 2
+    tcol = C_RED if is_boss else C_ORANGE
+    print()
+    print(C(f"{tcol}{B}{'═'*side}{title}{'═'*(bw - side - len(title))}{R}"))
+
+    # Sprites only when there is room for them
+    rows = H()
+    log_n = 8 if rows >= 44 else 6 if rows >= 36 else 5
+    if rows >= 32:
+        from game_art import player_look
+        acc, leg = player_look(player)
+        print()
+        for art_line in side_by_side(player.job.name, enemy.name,
+                                     player.name, enemy.name, gap=10,
+                                     left_accent=acc, left_legendary=leg):
+            print(art_line)
+    print()
+
+    eff_str = ("  " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in enemy.status_effects)) if enemy.status_effects else ""
+    phase = f"  {C_ORANGE}{B}⚡PHASE 2{R}" if getattr(enemy, "phase", 1) == 2 else ""
+    print(C(f"{C_RED}{B}FOE {R} {C_RED}{enemy.name[:16]:<16}{R} HP {hp_bar(enemy.hp, enemy.max_hp)}{eff_str}{phase}"))
+    p_eff = ("  " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in player.status_effects)) if player.status_effects else ""
+    buff  = (f"  {C_ORANGE}[ATK+{player.temp_atk_buff} {player.temp_atk_turns}t]{R}"
+             if getattr(player, "temp_atk_turns", 0) > 0 else "")
+    hero = f"{player.name[:10]} Lv{player.level}"
+    print(C(f"{C_GREEN}{B}YOU {R} {C_WHITE}{B}{hero:<16}{R} HP {hp_bar(player.hp, player.max_hp)}"
+            f"  MP {mp_bar(player.mp, player.max_mp)}{p_eff}{buff}"))
+    if player.party.members:
+        mates = "  ".join(f"{m._col()}{m.name}{R} {C_DIM}{m.hp}/{m.max_hp}{R}" for m in player.party.members)
+        print(C(f"{C_CYAN}{B}TEAM{R}  {mates}"))
+
+    # Combat log — the last few things that happened
+    print(C(f"{C_DIM}── battle log {'─'*40}{R}"))
+    shown = log[-log_n:]
+    for ln in [""] * (log_n - len(shown)) + shown:
+        print(C(ln))
+    if note:
+        print(C(note))
+    print(C(f"{C_DIM}{'─'*54}{R}"))
+
+    if stunned:
+        print(C(f"{C_YELLOW}⚡ {T('combat.stunned')}{R}"))
+    else:
+        print(C(f"{menu_opt('1', T('combat.attack'), 'Basic weapon strike')}   "
+                f"{menu_opt('2', T('combat.skill'), 'Class skill (MP)')}"))
+        print(C(f"{menu_opt('3', T('combat.item'), 'Potion, bomb, buff')}   "
+                f"{menu_opt('4', T('combat.defend'), 'Brace, take less damage')}"
+                + (f"   {menu_opt('5', T('combat.run'), 'Attempt to flee')}" if allow_escape else "")))
+
+
+def _choose_skill(player):
+    """Skill picker. Returns a Skill or None."""
+    clear()
+    print(section("SKILLS"))
+    print(C(f"{C_DIM}MP {player.mp}/{player.max_mp} — if MP is short, the rest is paid with HP.{R}\n"))
+    for i, sk in enumerate(player.skills, 1):
+        enough = C_GREEN if player.mp >= sk.mana_cost else C_RED
+        base   = (f"DMG {sk.damage}" if sk.damage else f"HEAL {sk.heal}" if sk.heal
+                  else "BUFF")
+        fx     = f" +{sk.status_effect.name}({sk.status_chance}%)" if sk.status_effect else ""
+        print(C(f"{menu_opt(i, sk.name, f'{base}{fx}')}  {enough}MP:{sk.mana_cost}{R}"))
+        if sk.description:
+            print(C(f"     {C_DIM}{sk.description}{R}"))
+    print(C(f"\n{menu_opt(0, 'Cancel')}"))
+    raw = prompt("Choose skill")
+    if raw.isdigit() and 1 <= int(raw) <= len(player.skills):
+        return player.skills[int(raw) - 1]
+    return None
+
+
+def _throw_bomb(player, enemy, idx, allow_escape, log):
+    """Bomb items. Returns 'escaped', 'used' or None (not used)."""
+    from game_items import remove_items
+    it = player.inventory[idx]
+    if it.name == "Smoke Bomb":
+        if not allow_escape:
+            log.append(f"{C_RED}The smoke clears — there is no escaping this foe!{R}")
+            return None
+        remove_items(player.inventory, it.name, 1)
+        log.append(f"{C_PURPLE}You vanish in a cloud of smoke!{R}")
+        return "escaped"
+    remove_items(player.inventory, it.name, 1)
+    dmg = it.value + player.level * 3 + random.randint(0, 10)
+    dealt = enemy.take_damage(dmg)
+    log.append(f"{C_ORANGE}{B}BOOM!{R} {it.name} hits {enemy.name} for {dealt} damage!")
+    if random.randint(1, 100) <= 40:
+        from game_items import Burn
+        enemy.add_status(Burn(duration=2, damage=5 + player.level))
+        log.append(f"{C_ORANGE}{enemy.name} is set ablaze!{R}")
+    return "used"
+
+
 def run_combat(player, enemy, allow_escape=True, first_strike=False):
     from game_enemies import BossEnemy
-    from game_items import roll_drops
+    from game_items import use_entry
     is_boss = isinstance(enemy, BossEnemy)
     base_defense = player.defense
+    log = []
+    used_potion = False
+    player._damage_this_battle = 0
 
     # ── Sneak attack on first round ──────────────────────────
     if first_strike and player.in_stealth:
-        import random as _r
-        base = max(1, player.atk + player.get_equip_atk_bonus() + _r.randint(0,3))
-        dmg  = player.stealth_first_strike(base)
-        enemy.take_damage(dmg)
-        clear()
-        print(C(f"\n{C_PURPLE}{B}★ {T('combat.sneak_attack')} {enemy.name} → {dmg} damage!{R}\n"))
-        if not enemy.is_alive():
-            print(C(f"{C_GREEN}{B}★ One-shot takedown! {enemy.name} is defeated!{R}"))
-            player.gold += enemy.gold_reward
-            player.gain_exp(enemy.exp_reward)
-            player.update_quests_on_kill(enemy.name)
-            from game_customise import tick_legendary_quest as _tlq
-            _tlq(player,"kill",enemy.name)
-            from game_enemies import BossEnemy as _BE
-            if isinstance(enemy,_BE): _tlq(player,"kill_boss")
-            drops = roll_drops(enemy.name)
-            for item in drops:
-                player.add_item(item)
-                print(C(f"{C_GOLD}→ Loot: {item}{R}"))
-            input(C(f"\n{C_DIM}(Press Enter){R}"))
-            return "victory"
-        input(C(f"{C_DIM}(Press Enter — continue fight){R}"))
+        base = max(1, player.combat_atk() + random.randint(0, 3))
+        dmg = _capture(log, player.stealth_first_strike, base)
+        dealt = enemy.take_damage(dmg)
+        log.append(f"{C_PURPLE}{B}★ {T('combat.sneak_attack')} {enemy.name} → {dealt} damage!{R}")
 
+    rnd = 0
     while enemy.is_alive() and player.is_alive():
-        # ── Status tick (player) ──
-        player.process_status_start()
+        rnd += 1
+        log.append(f"{C_DIM}── Round {rnd} ──{R}")
+
+        # ── Start of round: status ticks happen ONCE per round ──
+        _capture(log, player.process_status_start)
         if not player.is_alive():
-            if not player.check_god_potion(): break
+            if not _capture(log, player.check_god_potion):
+                break
         stunned = any(e.name == "Stun" for e in player.status_effects)
 
-        # ── Draw combat screen ──
-        clear()
-        if is_boss:
-            print(C(f"\n{C_RED}{B}╔══════════════════════════════════╗"))
-            print(C(f"║   ⚔  BOSS BATTLE: {enemy.name:<14}║"))
-            print(C(f"╚══════════════════════════════════╝{R}\n"))
-        else:
-            print(C(f"\n{C_RED}{B}⚔  BATTLE: {enemy.name}{R}\n"))
+        # ── Player picks an action (invalid input / cancel = pick again) ──
+        note = ""
+        fled = False
+        while True:
+            _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note)
+            note = ""
+            if stunned:
+                input(C(f"{C_DIM}(Press Enter){R}"))
+                log.append(f"{C_YELLOW}You are stunned and lose your turn!{R}")
+                break
+            action = prompt("Choose action")
 
-        # ── Sprite art row ──────────────────────────────────────
-        for art_line in side_by_side(
-            player.job.name, enemy.name,
-            player.name, enemy.name, gap=10
-        ):
-            print(art_line)
-        print()
-
-        # Enemy row
-        eff_str = (" (" + ", ".join(str(e) for e in enemy.status_effects) + ")") if enemy.status_effects else ""
-        print(C(f"{C_RED}{B}{enemy.name:<20}{R}  HP {hp_bar(enemy.hp, enemy.max_hp)}{C_DIM}{eff_str}{R}"))
-        print()
-
-        # Player row
-        p_eff = (" (" + ", ".join(str(e) for e in player.status_effects) + ")") if player.status_effects else ""
-        print(C(f"{C_WHITE}{B}{player.name:<20}{R}  HP {hp_bar(player.hp, player.max_hp)}"))
-        print(C(f"{'':20}   MP {mp_bar(player.mp, player.max_mp)}{C_DIM}{p_eff}{R}"))
-
-        print(); print(divider())
-
-        if stunned:
-            print(C(f"\n{C_YELLOW}⚡ {T('combat.stunned')}{R}"))
-        else:
-            print(C(f"\n{menu_opt('1', T('combat.attack'), 'Basic weapon strike')}"))
-            print(C(f"{menu_opt('2', T('combat.skill'), 'Use a class skill (costs MP)')}"))
-            print(C(f"{menu_opt('3', T('combat.item'), 'Use a consumable from your bag')}"))
-            print(C(f"{menu_opt('4', T('combat.defend'), 'Brace — reduce incoming damage')}"))
-            if allow_escape:
-                print(C(f"{menu_opt('5', T('combat.run'), 'Attempt to flee')}"))
-
-        action = prompt("Choose action")
-
-        if not stunned:
             if action == "1":
                 if enemy.try_dodge():
-                    print(C(f"\n{C_DIM}{T('combat.dodged', name=enemy.name)}{R}"))
+                    log.append(f"{C_DIM}{T('combat.dodged', name=enemy.name)}{R}")
                 else:
-                    base = max(1, player.atk + player.get_equip_atk_bonus() + random.randint(-2,3))
+                    base = max(1, player.combat_atk() + random.randint(-2, 3))
                     crit, dmg = player.calc_crit(base)
-                    enemy.take_damage(dmg)
+                    dealt = enemy.take_damage(dmg)
                     tag = f" {C_ORANGE}{B}CRITICAL!{R}" if crit else ""
                     if crit:
                         from game_customise import tick_legendary_quest as _tlq
-                        _tlq(player,"crit_hit")
-                    print(C(f"\n{C_WHITE}{T('combat.you_strike', crit=tag, dmg=dmg)}{R}"))
+                        _capture(log, _tlq, player, "crit_hit")
+                    log.append(f"{C_WHITE}{T('combat.you_strike', crit=tag, dmg=dealt)}{R}")
+                break
 
             elif action == "2":
                 if not player.skills:
-                    print(C(f"\n{C_DIM}You have no skills yet.{R}"))
-                    input(C(f"{C_DIM}(Press Enter){R}")); continue
-                clear()
-                print(section("SKILLS"))
-                print()
-                for i, sk in enumerate(player.skills, 1):
-                    enough = C_GREEN if player.mp >= sk.mana_cost else C_RED
-                    base   = f"DMG {sk.damage}" if sk.damage else f"HEAL {sk.heal}" if sk.heal else "?"
-                    fx     = f" +{sk.status_effect.name}({sk.status_chance}%)" if sk.status_effect else ""
-                    print(C(f"{menu_opt(i, sk.name, f'{base}{fx}')}  "
-                          f"{enough}MP:{sk.mana_cost}{R}"))
-                print(C(f"\n{menu_opt(len(player.skills)+1,'Cancel','')}"))
-                sc_raw = prompt("Choose skill")
-                try:
-                    sc = int(sc_raw)
-                    if sc == len(player.skills)+1: continue
-                    if not (1 <= sc <= len(player.skills)):
-                        print(C(f"{C_RED}Invalid.{R}")); input(); continue
-                    sk = player.skills[sc-1]
-                    success = sk.use(player, enemy if sk.damage > 0 else None)
-                    if success:
-                        from game_customise import tick_legendary_quest
-                        tick_legendary_quest(player, "skill_cast")
-                    if sk.heal > 0: player._tick_evolution_quest("heal_skill")
-                    if not success: continue
-                except ValueError:
+                    note = f"{C_DIM}You have no skills yet.{R}"; continue
+                sk = _choose_skill(player)
+                if sk is None:
                     continue
+                if not sk.can_use(player):
+                    note = f"{C_RED}Not enough MP or HP to cast {sk.name}.{R}"; continue
+                ok = _capture(log, sk.use, player, enemy if sk.damage > 0 else None)
+                if not ok:
+                    continue
+                from game_customise import tick_legendary_quest
+                _capture(log, tick_legendary_quest, player, "skill_cast")
+                if sk.heal > 0:
+                    _capture(log, player._tick_evolution_quest, "heal_skill")
+                break
 
             elif action == "3":
-                used = player.use_inventory_item()
-                if not used: continue
+                idx = player.pick_consumable(in_combat=True)
+                if idx is None:
+                    continue
+                it = player.inventory[idx]
+                if it.item_type == "bomb":
+                    res = _throw_bomb(player, enemy, idx, allow_escape, log)
+                    if res is None:
+                        continue
+                    if res == "escaped":
+                        fled = True
+                    break
+                if it.item_type in ("heal", "mana"):
+                    used_potion = True
+                if _capture(log, use_entry, player.inventory, idx, player, True):
+                    break
+                continue
 
             elif action == "4":
-                bonus = player.defend()
+                _capture(log, player.defend)
+                break
 
             elif action == "5" and allow_escape:
-                esc = 40 + player.job.dodge_bonus
-                if random.randint(1,100) <= esc:
-                    print(C(f"\n{C_GREEN}{T('combat.fled')}{R}"))
-                    input(C(f"{C_DIM}(Press Enter){R}"))
-                    player.defense = base_defense
-                    return "escaped"
+                esc = 40 + player.job.dodge_bonus + player.get_stealth()
+                if random.randint(1, 100) <= min(90, esc):
+                    log.append(f"{C_GREEN}{T('combat.fled')}{R}")
+                    fled = True
                 else:
-                    print(C(f"\n{C_RED}{T('combat.cant_flee')}{R}"))
+                    log.append(f"{C_RED}{T('combat.cant_flee')}{R}")
+                break
+
             else:
-                print(C(f"{C_RED}Invalid choice.{R}")); input(); continue
+                note = f"{C_RED}Invalid choice — pick one of the numbers below.{R}"
 
-        input(C(f"\n{C_DIM}(Press Enter — enemy turn){R}"))
+        if fled:
+            player.defense = base_defense
+            _draw_combat(player, enemy, is_boss, log, allow_escape, False, rnd)
+            input(C(f"{C_DIM}(Press Enter){R}"))
+            return "escaped"
 
-        player.process_status_end()
+        _capture(log, player.process_status_end)
+        _capture(log, player.tick_buffs)
 
         # ── Party members act ──
-        if enemy.is_alive() and hasattr(player, "party") and player.party.alive_members():
+        if enemy.is_alive() and player.party.alive_members():
             for companion in player.party.alive_members():
                 if not enemy.is_alive(): break
-                action_str = companion.combat_action(player, enemy, player.party.members)
-                print(C(f"{action_str}"))
+                _capture(log, companion.combat_action, player, enemy, player.party.members)
 
         # ── Enemy turn ──
         if enemy.is_alive():
-            enemy.process_status_start()
+            _capture(log, enemy.process_status_start)
             if enemy.is_alive():
-                if isinstance(enemy, BossEnemy):
-                    enemy.use_boss_skill(player)
-                elif enemy.skills and random.randint(1,100) <= 20:
-                    sk = random.choice(enemy.skills)
-                    if sk == "power_strike":
-                        dmg = enemy.atk * 2; actual = player.take_damage(dmg)
-                        print(C(f"\n{C_RED}{enemy.name} POWER STRIKES → {actual} damage!{R}"))
-                    else:
-                        enemy.basic_attack(player)
+                if is_boss:
+                    _capture(log, enemy.use_boss_skill, player)
                 else:
-                    enemy.basic_attack(player)
-            enemy.process_status_end()
-            from game_customise import tick_legendary_quest as _tlq
-            _tlq(player, "damage_taken", max(0, player.max_hp - player.hp))
+                    _capture(log, enemy.basic_attack, player)
+            _capture(log, enemy.process_status_end)
 
         if not player.is_alive():
-            if not player.check_god_potion(): break
+            if not _capture(log, player.check_god_potion):
+                break
 
         player.defense = base_defense
-        input(C(f"{C_DIM}(Press Enter){R}"))
+
+    player.defense = base_defense
 
     # ── Result ──
     clear()
     if not player.is_alive():
+        for ln in log[-6:]:
+            print(C(ln))
+        print()
         print_sprite(enemy.name, label=f"✖  DEFEATED  ✖")
         print(C(f"\n{C_RED}{B}╔══════════════════════╗"))
         print(C(f"║   ✖  DEFEATED        ║"))
@@ -267,39 +338,64 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
         input(C(f"\n{C_DIM}(Press Enter){R}"))
         return "defeat"
 
-    print_sprite(player.job.name, label=f"★  VICTORY  ★")
+    from game_art import player_look
+    _acc, _leg = player_look(player)
+    print_sprite(player.job.name, label=f"★  VICTORY  ★", accent=_acc, legendary=_leg)
     print(C(f"\n{C_GREEN}{B}╔══════════════════════════════╗"))
-    print(C(f"║   ★  VICTORY!              ║"))
+    print(C(f"║   ★  VICTORY!                ║"))
     print(C(f"╚══════════════════════════════╝{R}\n"))
-    print(C(f"{C_GOLD}{T('combat.gold_exp', gold=enemy.gold_reward, exp=enemy.exp_reward)}{R}"))
-    player.gold += enemy.gold_reward
-    leveled = player.gain_exp(enemy.exp_reward)
-    player.update_quests_on_kill(enemy.name)
+    completed = award_victory(player, enemy, used_potion)
+    input(C(f"\n{C_DIM}(Press Enter){R}"))
+    if completed:
+        from game_stories import show_story_completion
+        for stype, step in completed:
+            show_story_completion(stype, step)
+    return "victory"
+
+
+def award_victory(player, enemy, used_potion=False):
+    """Gold, EXP, loot, quest/story/legendary progress for a defeated enemy.
+    Returns story completions [(type, step)] for the caller to display."""
+    from game_enemies import BossEnemy
     from game_customise import tick_legendary_quest as _tlq
-    _tlq(player,"kill",enemy.name)
-    from game_enemies import BossEnemy as _BE2
-    if isinstance(enemy,_BE2): _tlq(player,"kill_boss")
-    # Trophy for boss kills
-    from game_enemies import BossEnemy as _BE
-    if isinstance(enemy, _BE) and hasattr(player,"bases"):
+    is_boss = isinstance(enemy, BossEnemy)
+
+    gold = enemy.gold_reward + getattr(player, "_gold_bonus_kill", 0)
+    print(C(f"{C_GOLD}{T('combat.gold_exp', gold=gold, exp=enemy.exp_reward)}{R}"))
+    player.gold += gold
+    player.gain_exp(enemy.exp_reward)
+    player.update_quests_on_kill(enemy.name)
+
+    _tlq(player, "kill", enemy.name)
+    if is_boss:
+        _tlq(player, "kill_boss")
+    if getattr(player, "_damage_this_battle", 0) == 0:
+        _tlq(player, "no_damage_battle")
+    if not used_potion:
+        # Tank awakening: "Survive 5 battles without using any potions"
+        player._tick_evolution_quest("survive")
+
+    if is_boss and hasattr(player, "bases"):
         for base in player.bases.bases.values():
-            added = base.add_trophy(enemy.name, "?")
-            if added:
-                print(C(f"{C_GOLD}🏆 Trophy added: {enemy.name}!{R}"))
+            if base.add_trophy(enemy.name, base.continent_id):
+                print(C(f"{C_GOLD}🏆 Trophy added to {base.name}: {enemy.name}!{R}"))
                 break
 
     drops = roll_drops(enemy.name)
     if drops:
         print(C(f"\n{C_YELLOW}Loot dropped:{R}"))
         for item in drops:
-            player.add_item(item)
-            print(C(f"  {C_WHITE}→ {item}{R}"))
+            if player.add_item(item):
+                print(C(f"  {C_WHITE}→ {item}{R}"))
     else:
         print(C(f"\n{C_DIM}{T('combat.no_drops')}{R}"))
 
-    input(C(f"\n{C_DIM}(Press Enter){R}"))
-    player.defense = base_defense
-    return "victory"
+    # Story progress (used to only be counted on the world map, so story
+    # steps that need dungeon enemies — e.g. 8 Cultists — were impossible)
+    completed = []
+    if hasattr(player, "stories"):
+        completed = player.stories.on_kill(enemy.name, player)
+    return completed
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -425,6 +521,20 @@ class Town:
         self._ship      = ship
         self._ship_player = player
 
+    def set_world(self, world_map, autosave=None):
+        """World reference — needed to save the game from inside a town."""
+        self._world_map = world_map
+        self._autosave  = autosave
+
+    def _save_game(self):
+        if not self._world_map:
+            print(C(f"\n{C_RED}Saving isn't available here.{R}"))
+            input(C(f"{C_DIM}(Press Enter){R}")); return
+        from game_saves import save_browser
+        save_browser(mode="save", current_player=self.player,
+                     current_world=self._world_map,
+                     autosave=getattr(self, "_autosave", None))
+
     def _header(self, subtitle=""):
         clear()
         print(C(f"\n{C_GOLD}{B}╔══════════════════════════════════════════╗"))
@@ -450,7 +560,10 @@ class Town:
                 self.player.hp = self.player.max_hp
                 self.player.mp = self.player.max_mp
                 self.player.status_effects.clear()
+                for m in self.player.party.members:
+                    m.rest()
                 print(C(f"\n{C_GREEN}You rest deeply. Fully restored!{R}"))
+                pass_day(self.player)
             else:
                 print(C(f"\n{C_RED}{T('ui.not_enough_gold')} (have {self.player.gold}g){R}"))
         input(C(f"\n{C_DIM}(Press Enter){R}"))
@@ -469,52 +582,72 @@ class Town:
             elif ch == "0": break
 
     def _buy(self):
-        self._header("Shop — Buy")
-        pc = self.player.job.name
-        print(C(f"\n{C_GOLD}Your gold: {self.player.gold}g{R}  {C_DIM}Class: {C_CYAN}{pc}{R}\n"))
-        for i,(item,price) in enumerate(self.shop_stock, 1):
-            ac = getattr(item,"allowed_classes",None)
-            can_use = (ac is None or pc in ac)
-            rcol = item.rarity_col() if hasattr(item,"rarity_col") else C_WHITE
-            stat = f"  {C_DIM}{item.stat_line()}{R}" if hasattr(item,"stat_line") else ""
-            if not can_use:
-                col = C_DIM
-                cnote = f"  {C_RED}({', '.join(ac[:2])} only){R}"
-            else:
-                col = rcol if self.player.gold >= price else C_DIM
-                cnote = ""
-            print(C(f"{C_GOLD}{B}[{i:>2}]{R} {col}{item.name:<26}{R}{stat}{cnote}  {C_GOLD}{price}g{R}"))
-        print(C(f"\n{menu_opt(0,'Cancel')}"))
-        ch = prompt("Buy item #")
-        if ch == "0" or not ch.isdigit(): return
-        idx = int(ch)-1
-        if not (0 <= idx < len(self.shop_stock)): return
         import copy
-        item,price = self.shop_stock[idx]
-        if self.player.gold < price:
-            print(C(f"\n{C_RED}Not enough gold!{R}")); input(C(f"{C_DIM}(Enter){R}")); return
-        self.player.gold -= price
-        self.player.add_item(copy.deepcopy(item))
-        print(C(f"\n{C_GREEN}Bought {item.name}!{R}"))
-        input(C(f"{C_DIM}(Press Enter){R}"))
+        from game_items import STACKABLE_TYPES, item_count
+        from game_player import Player
+        msg = ""
+        while True:
+            self._header("Shop — Buy")
+            pc = self.player.job.name
+            print(C(f"\n{C_GOLD}Your gold: {self.player.gold}g{R}  {C_DIM}Class: {C_CYAN}{pc}{R}\n"))
+            for i,(item,price) in enumerate(self.shop_stock, 1):
+                ac = getattr(item,"allowed_classes",None)
+                can_use = (ac is None or pc in ac)
+                rcol = item.rarity_col() if hasattr(item,"rarity_col") else C_WHITE
+                if hasattr(item, "stat_line"):
+                    stat = f"  {C_DIM}{item.stat_line()}{R}"
+                    have = self.player.equipped.get(item.slot)
+                    if have and have.name == item.name:
+                        stat += f" {C_GREEN}[equipped]{R}"
+                else:
+                    owned = item_count(self.player.inventory, item.name)
+                    stat = (f"  {C_DIM}{Player.describe_consumable(item)}{R}"
+                            + (f" {C_DIM}(have {owned}){R}" if owned else ""))
+                if not can_use:
+                    col = C_DIM
+                    cnote = f"  {C_RED}({', '.join(ac[:2])} only){R}"
+                else:
+                    col = rcol if self.player.gold >= price else C_DIM
+                    cnote = ""
+                print(C(f"{C_GOLD}{B}[{i:>2}]{R} {col}{item.name:<20}{R} {C_GOLD}{price:>4}g{R}{stat}{cnote}"))
+            if msg:
+                print(C(f"\n{msg}")); msg = ""
+            print(C(f"\n{menu_opt(0,'Done')}   {C_DIM}Tip: '3x5' buys five of item 3{R}"))
+            ch = prompt("Buy item #").lower().replace(" ", "")
+            if ch in ("0", ""): return
+            qty = 1
+            if "x" in ch:
+                ch, _, q = ch.partition("x")
+                qty = int(q) if q.isdigit() and int(q) > 0 else 1
+            if not ch.isdigit(): continue
+            idx = int(ch)-1
+            if not (0 <= idx < len(self.shop_stock)): continue
+            item,price = self.shop_stock[idx]
+            if item.item_type not in STACKABLE_TYPES:
+                qty = 1
+            note = ""
+            ac = getattr(item, "allowed_classes", None)
+            if ac and pc not in ac:
+                note = f"  {C_YELLOW}(Note: a {pc} can't equip it — you can still resell it.){R}"
+            total = price * qty
+            if self.player.gold < total:
+                msg = f"{C_RED}Not enough gold! {qty}x {item.name} costs {total}g.{R}"; continue
+            bought = 0
+            for _ in range(qty):
+                if not self.player.add_item(copy.deepcopy(item)):
+                    break
+                bought += 1
+            self.player.gold -= price * bought
+            if bought:
+                msg = f"{C_GREEN}Bought {bought}x {item.name} for {price*bought}g.{R}{note}"
+            else:
+                msg = f"{C_RED}Your bag is full!{R}"
 
     def _sell(self):
-        self._header("Shop — Sell")
-        if not self.player.inventory:
-            print(C(f"\n{C_DIM}Your bag is empty.{R}"))
-            input(C(f"{C_DIM}(Press Enter){R}")); return
-        print()
-        for i,it in enumerate(self.player.inventory, 1):
-            print(C(f"{C_GOLD}{B}[{i:>2}]{R} {C_WHITE}{it.name:<26}{R}  {C_DIM}Sell: {C_GOLD}{it.sell_value} gold{R}"))
-        print(C(f"\n{menu_opt(0,'Cancel')}"))
-        ch = prompt("Sell item #")
-        if ch == "0" or not ch.isdigit(): return
-        idx = int(ch)-1
-        if not (0 <= idx < len(self.player.inventory)): return
-        item = self.player.inventory.pop(idx)
-        self.player.gold += item.sell_value
-        print(C(f"\n{C_GREEN}Sold {item.name} for {item.sell_value} gold.{R}"))
-        input(C(f"{C_DIM}(Press Enter){R}"))
+        # Stack-aware sell screen (the old one sold a whole stack for the
+        # price of a single item)
+        from game_sell import open_sell_screen
+        open_sell_screen(self.player, shop_sell_multiplier=1.0)
 
     # ── QUEST BOARD ───────────────────────────────────────────
 
@@ -615,9 +748,9 @@ class Town:
         if ch == "0" or not ch.isdigit(): return
         idx = int(ch)-1
         if 0 <= idx < len(clan_list):
-            self.player.clan = clan_list[idx][0]
+            self.player.join_clan(clan_list[idx][0])
             col = clan_list[idx][1][1]
-            print(C(f"\n{col}Welcome to the {self.player.clan}!{R}"))
+            print(C(f"\n{col}Welcome to the {self.player.clan}!{R}  {C_DIM}Perks: {clan_list[idx][1][2]}{R}"))
             input(C(f"{C_DIM}(Press Enter){R}"))
 
     # ── NPC DIALOGUE ─────────────────────────────────────────
@@ -655,65 +788,76 @@ class Town:
                         self.player.hp = self.player.max_hp
                         print(C(f"  {C_GREEN}Your HP is fully restored!{R}"))
             input(C(f"\n{C_DIM}(Press Enter){R}"))
+            # Main story: "Speak to townsfolk in any city"
+            completed = self.player.stories.on_talk("dragon_rumour", self.player)
+            if completed:
+                from game_stories import show_story_completion
+                for stype, step in completed:
+                    show_story_completion(stype, step)
 
 
     # ── CRAFTING ─────────────────────────────────────────────
 
     def crafting_bench(self):
-        self._header("Crafting Bench")
-        mat_count = {}
-        for it in self.player.inventory:
-            if it.item_type == "material":
-                mat_count[it.name] = mat_count.get(it.name, 0) + 1
+        from game_items import material_counts, remove_items, INVENTORY_LIMIT, STACKABLE_TYPES
+        msg = ""
+        while True:
+            self._header("Crafting Bench")
+            mat_count = material_counts(self.player.inventory)
 
-        print(C(f"\n{C_CYAN}Your materials:{R}"))
-        if not mat_count:
-            print(C(f"{C_DIM}None. Defeat monsters to collect materials.{R}"))
-        else:
-            for m,q in mat_count.items():
-                print(C(f"  {C_WHITE}{m:<22}{R}  x{q}"))
+            print(C(f"\n{C_CYAN}Your materials:{R}"))
+            if not mat_count:
+                print(C(f"{C_DIM}None. Defeat monsters and visit mines to collect materials.{R}"))
+            else:
+                mats = [f"{C_WHITE}{m}{R} {C_GOLD}x{q}{R}" for m, q in sorted(mat_count.items())]
+                for i in range(0, len(mats), 4):
+                    print(C("   ".join(mats[i:i+4])))
 
-        print(C(f"\n{C_CYAN}Recipes:{R}"))
-        available = []
-        pc = self.player.job.name
-        for rec in CRAFTING_RECIPES:
-            can = all(mat_count.get(k,0) >= v for k,v in rec["needs"].items())
-            cls_ok = (rec.get("classes") is None or pc in rec.get("classes",[]))
-            mark = f"{C_GREEN}[OK]{R}" if (can and cls_ok) else (f"{C_YELLOW}[CLS]{R}" if can else f"{C_RED}[--]{R}")
-            needs = ", ".join(f"{k}x{v}" for k,v in rec["needs"].items())
-            cnote = f"  {C_DIM}({pc} can't craft){R}" if not cls_ok else ""
-            desc = f"  {C_DIM}{rec.get('desc','')}{R}"
-            print(C(f"{mark} {C_WHITE}{rec['name']:<22}{R}  {C_DIM}{needs}{R}{cnote}{desc}"))
-            if can and cls_ok: available.append(rec)
+            print(C(f"\n{C_CYAN}Recipes:{R}  {C_DIM}([OK] craftable  [--] missing materials  [CLS] other class){R}"))
+            available = []
+            pc = self.player.job.name
+            for rec in CRAFTING_RECIPES:
+                can = all(mat_count.get(k,0) >= v for k,v in rec["needs"].items())
+                cls_ok = (rec.get("classes") is None or pc in rec.get("classes",[]))
+                if can and cls_ok:
+                    available.append(rec)
+                    mark = f"{C_GREEN}[{len(available):>2}]{R}"
+                elif not cls_ok:
+                    mark = f"{C_YELLOW}[CLS]{R}"
+                else:
+                    mark = f"{C_RED}[--]{R}"
+                needs = ", ".join(
+                    f"{(C_GREEN if mat_count.get(k,0) >= v else C_RED)}{k} {mat_count.get(k,0)}/{v}{R}"
+                    for k,v in rec["needs"].items())
+                qty = f" x{rec['qty']}" if rec.get("qty", 1) > 1 else ""
+                print(C(f"{mark} {C_WHITE}{rec['name'] + qty:<22}{R} {needs}  {C_DIM}{rec.get('desc','')}{R}"))
 
-        if not available:
-            print(C(f"\n{C_DIM}Nothing you can craft right now.{R}"))
-            input(C(f"{C_DIM}(Press Enter){R}")); return
+            if msg:
+                print(C(f"\n{msg}")); msg = ""
+            if not available:
+                print(C(f"\n{C_DIM}Nothing you can craft right now.{R}"))
+                input(C(f"{C_DIM}(Press Enter){R}")); return
 
-        print(C(f"\n{C_CYAN}Craftable:{R}"))
-        for i,rec in enumerate(available, 1):
-            print(C(f"{menu_opt(i, rec['name'])}"))
-        print(C(f"\n{menu_opt(0,'Cancel')}"))
-        ch = prompt("Craft #")
-        if ch == "0" or not ch.isdigit(): return
-        idx = int(ch)-1
-        if not (0 <= idx < len(available)): return
-        rec = available[idx]
-        for mat_name, qty in rec["needs"].items():
-            removed = 0; new_inv = []
-            for it in self.player.inventory:
-                if it.name == mat_name and removed < qty: removed += 1
-                else: new_inv.append(it)
-            self.player.inventory = new_inv
-        result = rec["result"]()
-        self.player.add_item(result)
-        print(C(f"\n{C_GREEN}Crafted: {result}!{R}"))
-        input(C(f"{C_DIM}(Press Enter){R}"))
+            print(C(f"\n{C_DIM}Type the number shown in green to craft it.{R}  {menu_opt(0,'Leave')}"))
+            ch = prompt("Craft #")
+            if ch == "0" or not ch.isdigit(): return
+            idx = int(ch)-1
+            if not (0 <= idx < len(available)): continue
+            rec = available[idx]
+            results = [rec["result"]() for _ in range(rec.get("qty", 1))]
+            if len(self.player.inventory) >= INVENTORY_LIMIT and \
+                    not any(r.item_type in STACKABLE_TYPES for r in results):
+                msg = f"{C_RED}Your bag is full — make room first.{R}"; continue
+            for mat_name, qty in rec["needs"].items():
+                remove_items(self.player.inventory, mat_name, qty)
+            for r in results:
+                self.player.add_item(r)
+            msg = f"{C_GREEN}Crafted: {results[0]}{' x'+str(len(results)) if len(results) > 1 else ''}!{R}"
 
     # ── INVENTORY ─────────────────────────────────────────────
 
     def inventory_screen(self):
-        from game_items import INVENTORY_LIMIT, GuildStorage
+        from game_items import INVENTORY_LIMIT, GuildStorage, ItemStack, remove_items, use_entry
         player = self.player
         if not hasattr(player, "guild_storage"):
             player.guild_storage = GuildStorage()
@@ -722,29 +866,48 @@ class Town:
             self._header("Inventory & Storage")
             inv = player.inventory
             limit = INVENTORY_LIMIT
-            print(C(f"\n{C_CYAN}YOUR BAG  {C_DIM}({len(inv)}/{limit} slots){R}\n"))
+            print(C(f"\n{C_CYAN}EQUIPPED{R}"))
+            worn = [(s, it) for s, it in player.equipped.items() if it]
+            if not worn:
+                print(C(f"  {C_DIM}Nothing equipped.{R}"))
+            for s, it in worn:
+                print(C(f"  {C_DIM}{s:<7}{R} {it.rarity_col()}{it.name:<22}{R} {C_DIM}{it.stat_line()}{R}"))
+            print(C(f"\n{C_CYAN}YOUR BAG  {C_DIM}({len(inv)}/{limit} slots){R}"))
             if not inv:
                 print(C(f"  {C_DIM}Empty. Defeat enemies and open chests to collect items.{R}"))
             else:
+                from game_player import Player
                 for i, it in enumerate(inv, 1):
                     rcol = it.rarity_col() if hasattr(it,"rarity_col") else C_WHITE
                     slot_tag = f"{C_DIM}[{it.slot}]{R}" if hasattr(it,"slot") else f"{C_DIM}[{it.item_type}]{R}"
-                    stat = f"  {C_DIM}{it.stat_line()}{R}" if hasattr(it,"stat_line") else (f"  {C_GREEN}+{it.value}{R}" if it.item_type in ("heal","mana") else "")
-                    eq_mark = ""
-                    for e_it in player.equipped.values():
-                        if e_it and e_it.name == it.name: eq_mark = f" {C_GREEN}[EQ]{R}"; break
-                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{it.name:<26}{R} {slot_tag}{eq_mark}{stat}"))
+                    stat = (f"  {C_DIM}{it.stat_line()}{R}" if hasattr(it,"stat_line")
+                            else f"  {C_GREEN}{Player.describe_consumable(it)}{R}")
+                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{str(it):<26}{R} {slot_tag}{stat}"))
             print()
-            print(C(f"  {C_GOLD}[E]{R}{C_DIM} Equip  {C_GOLD}[U]{R} Use  {C_GOLD}[D]{R} Drop  {C_GOLD}[G]{R} Guild Storage  {C_GOLD}[0]{R} Back{R}"))
+            print(C(f"  {C_GOLD}[E]{R}{C_DIM} Equip  {C_GOLD}[R]{R}{C_DIM} Unequip  {C_GOLD}[U]{R}{C_DIM} Use  "
+                    f"{C_GOLD}[D]{R}{C_DIM} Drop  {C_GOLD}[G]{R}{C_DIM} Guild Storage  {C_GOLD}[0]{R}{C_DIM} Back{R}"))
             ch = prompt("Choice").lower()
             if ch == "0": break
             elif ch == "e": player.equip_item()
+            elif ch == "r": player.unequip_item()
             elif ch == "u": player.use_inventory_item()
             elif ch == "d":
                 ch2 = prompt("Drop item # (or 0 to cancel)")
                 if ch2.isdigit() and 1<=int(ch2)<=len(inv):
-                    it = inv.pop(int(ch2)-1)
-                    print(C(f"{C_DIM}Dropped {it.name}.{R}")); input(C(f"{C_DIM}(Enter){R}"))
+                    it = inv[int(ch2)-1]
+                    n = 1
+                    if isinstance(it, ItemStack) and it.qty > 1:
+                        q = prompt(f"Drop how many? (1-{it.qty}, Enter = all)")
+                        n = int(q) if q.isdigit() and 1 <= int(q) <= it.qty else it.qty
+                    if it.item_type == "god":
+                        if prompt(f"Really drop {it.name}? It saves your life! (y/n)").lower() != "y":
+                            continue
+                    name = it.name
+                    if isinstance(it, ItemStack):
+                        remove_items(inv, name, n)
+                    else:
+                        inv.remove(it)
+                    print(C(f"{C_DIM}Dropped {n}x {name}.{R}")); input(C(f"{C_DIM}(Enter){R}"))
             elif ch == "g":
                 self._guild_storage_screen(player, gs)
 
@@ -789,29 +952,37 @@ class Town:
         while True:
             self._header(f"Region: {self.region_name}")
             print()
-            print(C(f"{menu_opt('1', T('town.inn'),        T('town.inn_cost', cost=max(5,10+self.player.level*2)))}"))
-            print(C(f"{menu_opt('2', T('town.shop'),       'Buy & sell items')}"))
-            print(C(f"{menu_opt('3', T('town.quest_board'), f'Active: {len(self.player.active_quests)}/3')}"))
-            print(C(f"{menu_opt('4', T('town.guild'),      'Rank up, clan, awaken')}"))
-            print(C(f"{menu_opt('5', T('town.talk'),       'NPC dialogue')}"))
-            print(C(f"{menu_opt('6', T('town.crafting'),   'Craft gear from materials')}"))
-            print(C(f"{menu_opt('7', T('town.status'),     'View your full character sheet')}"))
-            print(C(f"{menu_opt('8', T('town.inventory'),  'Manage your bag')}"))
-            print(C(f"{menu_opt('S', T('town.save'),       '')}"))
-            print(C(f"{menu_opt('R', T('town.recruit'),    'Hire party members')}"))
-            print(C(f"{menu_opt('T', T('town.trade'),      'Trade items')}"))
-            print(C(f"{menu_opt('K', T('town.codex'),      'Bestiary, crafting guide')}"))
-            print(C(f"{menu_opt('C', 'Customise',        'Choose your class trait')}"))
-            print(C(f"{menu_opt('C', 'Customise',          'Change your look & style perk')}"))
-            print(C(f"{menu_opt('H', T('town.base'),       'Enter, build, upgrade')}"))
+            # Two columns keep the whole menu on screen even on short terminals
+            left = [
+                menu_opt('1', T('town.inn'),        T('town.inn_cost', cost=max(5,10+self.player.level*2))),
+                menu_opt('2', T('town.shop'),       'Buy & sell'),
+                menu_opt('3', T('town.quest_board'), f'Active: {len(self.player.active_quests)}/3'),
+                menu_opt('4', T('town.guild'),      'Rank, clan, awaken'),
+                menu_opt('5', T('town.talk'),       'NPC dialogue'),
+                menu_opt('6', T('town.crafting'),   'Craft gear'),
+                menu_opt('7', T('town.status'),     'Character sheet'),
+                menu_opt('8', T('town.inventory'),  'Bag & equipment'),
+            ]
+            right = [
+                menu_opt('R', T('town.recruit'),    'Party & clan'),
+                menu_opt('T', T('town.trade'),      'Barter'),
+                menu_opt('C', 'Customise',          'Look & style perk'),
+                menu_opt('H', T('town.base'),       'Your base'),
+                menu_opt('K', T('town.codex'),      'Encyclopedia'),
+                menu_opt('S', T('town.save'),       'Save to a slot'),
+            ]
             if self._ship:
-                print(C(f"{menu_opt('V', 'Board Ship',     'Sail to another continent')}"))
-            print(C(f"{menu_opt('0', T('town.leave'),      '')}"))
-            print()
+                right.append(menu_opt('V', 'Board Ship', 'Sail away'))
+            right.append(menu_opt('0', T('town.leave'), 'Back to the map'))
+            from game_term import _vis
+            colw = max(_vis(x) for x in left) + 4
+            for i in range(max(len(left), len(right))):
+                l = left[i] if i < len(left) else ""
+                r_ = right[i] if i < len(right) else ""
+                print(C(l + " " * (colw - _vis(l)) + r_))
 
-            evo_ready = self.player.can_awaken()
-            if evo_ready:
-                print(C(f"\n{C_ORANGE}{B}  ★  Your class awakening is ready! Visit the Guild.  ★{R}"))
+            if self.player.can_awaken():
+                print(C(f"\n{C_ORANGE}{B}★  Your class awakening is ready! Visit the Guild [4].  ★{R}"))
 
             ch = prompt("Choice").lower()
             if ch == "1":   self.inn()
@@ -823,7 +994,7 @@ class Town:
             elif ch == "7":
                 clear(); self.player.show_status(); input(C(f"\n{C_DIM}(Press Enter){R}"))
             elif ch == "8": self.inventory_screen()
-            elif ch == "s": self.player.save(); input(C(f"{C_DIM}(Press Enter){R}"))
+            elif ch == "s": self._save_game()
             elif ch == "r":
                 if self._companion_cb:
                     self._companion_cb()
@@ -839,22 +1010,21 @@ class Town:
                 from game_codex import open_encyclopedia
                 open_encyclopedia(self.player)
             elif ch == "c":
-                from game_customise import open_customisation
-                open_customisation(self.player)
-            elif ch == "c":
+                # (a second, unreachable [C] entry used to call a function
+                #  that doesn't exist — choosing it crashed the game)
                 from game_customise import open_customise
                 open_customise(self.player)
             elif ch == "v":
                 if self._ship and self._world_map and self._ship_player:
-                    self._world_map._board_ship(self._ship_player, self._ship)
+                    if self._world_map._board_ship(self._ship_player, self._ship):
+                        return   # sailed away — leave the town
                 else:
                     print(C(f"\n{C_DIM}No ship available here.{R}"))
                     input(C(f"{C_DIM}(Enter){R}"))
-            elif ch == "0":
-                print(C(f"\n{C_DIM}{T('town.leave')}: {self.town_name}.{R}"))
-                input(C(f"{C_DIM}(Press Enter){R}")); return
-            else:
-                print(C(f"\n{C_RED}Invalid choice.{R}")); input(C(f"{C_DIM}(Press Enter){R}"))
+            elif ch in ("0", "q"):
+                return
+            elif ch == "":
+                continue
 
 
     def _base_menu(self):
@@ -872,177 +1042,20 @@ class Town:
 
 
 # ═══════════════════════════════════════════════════════════════
-# DUNGEON
+# TIME
 # ═══════════════════════════════════════════════════════════════
 
-class Dungeon:
-    def __init__(self, name, width=30, height=14, danger=2, player_level=1, has_boss=False, boss_override=None):
-        self.name         = name
-        self.width        = width
-        self.height       = height
-        self.danger       = danger
-        self.player_level = player_level
-        self.has_boss     = has_boss
-        self.boss_name    = boss_override   # None = random, string = specific boss
-        self.grid = [["#"]*width for _ in range(height)]
-        self.px, self.py = 1, 1
-        self.ex, self.ey = width-2, height-2
-        self._generate()
+def pass_day(player):
+    """One night's rest at an inn or base: the player's clan earns income."""
+    clan = getattr(player, "owned_clan", None)
+    if clan:
+        earned = clan.tick(1)
+        print(C(f"{C_GOLD}Your clan '{clan.name}' earned {earned}g today "
+                f"(collect it from the Clan menu).{R}"))
 
-    def _generate(self):
-        for y in range(1,self.height-1):
-            for x in range(1,self.width-1):
-                self.grid[y][x] = "."
-        if self.width >= 6 and self.height >= 6:
-            for _ in range((self.width*self.height)//6):
-                x = random.randint(2,self.width-3); y = random.randint(2,self.height-3)
-                self.grid[y][x] = "#"
-        self.grid[self.py][self.px] = "."
-        tile = "B" if self.has_boss else "E"
-        self.grid[self.ey][self.ex] = tile
-        for _ in range(5):
-            x = random.randint(2,self.width-3); y = random.randint(2,self.height-3)
-            if self.grid[y][x] == ".": self.grid[y][x] = "T"
-        if self.has_boss and self.boss_name is None:
-            from game_enemies import BOSS_DEFS
-            self.boss_name = random.choice(list(BOSS_DEFS.keys()))
 
-    TILE_COLOURS = {
-        "#": fg(80,60,60),  ".": fg(60,50,50),  "T": fg(255,215,0),
-        "E": fg(80,200,80), "B": fg(220,60,60),
-    }
-
-    def render(self, player):
-        clear()
-        from game_term import _pad
-        # Align map rows with all other C()-centred content
-        cols = W()
-        map_pad = " " * _pad()
-
-        print(C(f"\n{C_RED}{B}DUNGEON: {self.name}{R}  {C_DIM}Danger {self.danger}{R}\n"))
-        for y in range(self.height):
-            row = map_pad
-            for x in range(self.width):
-                if x == self.px and y == self.py:
-                    row += f"{fg(255,60,60)}{B}@{R}"
-                else:
-                    ch  = self.grid[y][x]
-                    col = self.TILE_COLOURS.get(ch, "")
-                    row += f"{col}{ch}{R}"
-            print(row)
-
-        # Legend
-        print(C(f"\n{fg(255,60,60)}@{R} You  "
-                f"{fg(80,60,60)}#{R} Wall  "
-                f"{fg(60,50,50)}.{R} Floor  "
-                f"{fg(255,215,0)}T{R} Chest  "
-                f"{fg(80,200,80)}E{R} Exit  "
-                f"{fg(220,60,60)}B{R} Boss"))
-        # Status bar with HP/MP bars
-        hp_w = max(10, min(18, cols // 8))
-        mp_w = max(6,  min(12, cols // 12))
-        print(C(f"\n{C_WHITE}{B}{player.name}{R}  "
-                f"{C_DIM}Lv{R}{C_GOLD}{B}{player.level}{R}  "
-                f"HP {hp_bar(player.hp,player.max_hp,hp_w)}  "
-                f"MP {mp_bar(player.mp,player.max_mp,mp_w)}  "
-                f"{C_GOLD}G:{player.gold}{R}"))
-        # Controls hint
-        mhint = f"{C_GOLD}WASD{R}" if (not player or getattr(player,"movement_mode","wasd")=="wasd") else f"{C_GOLD}Numpad{R}"
-        print(C(f"\n{mhint}{C_DIM}=move  {R}"
-                f"{C_GOLD}[E]{R}{C_DIM}Enter/chest  {R}"
-                f"{C_GOLD}[I]{R}{C_DIM}Bag  {R}"
-                f"{C_GOLD}[C]{R}{C_DIM}Codex  {R}"
-                f"{C_GOLD}[?]{R}{C_DIM}Help  {R}"
-                f"{C_GOLD}[Q]{R}{C_DIM}Retreat{R}"))
-
-    def move(self, dx, dy):
-        nx,ny = self.px+dx, self.py+dy
-        if not (0<=nx<self.width and 0<=ny<self.height): return "blocked"
-        tile = self.grid[ny][nx]
-        if tile == "#": return "blocked"
-        self.px,self.py = nx,ny
-        if tile == "T": self.grid[ny][nx] = "."; return "chest"
-        if tile == "E": return "exit"
-        if tile == "B": return "boss"
-        base_enc = 0.12 + self.danger*0.03
-        if random.random() < base_enc: return "encounter"
-        return "moved"
-
-    def enter(self, player):
-        from game_items import ITEM_POOL
-        from game_input import InputHandler
-        inp = InputHandler(mode=getattr(player, "movement_mode", "wasd"))
-        self._last_msg = ""
-        while True:
-            self.render(player)
-            action = inp.get_action()
-            if action[0] == "cmd":
-                cmd = action[1]
-                if cmd in ("quit", "save"):
-                    print(C(f"\n{C_DIM}You retreat from the dungeon.{R}"))
-                    import time; time.sleep(0.4); return "left"
-                elif cmd == "inventory":
-                    from main import _quick_inventory
-                    _quick_inventory(player)
-                elif cmd == "codex":
-                    from game_codex import open_encyclopedia
-                    open_encyclopedia(player)
-                elif cmd == "help":
-                    clear()
-                    print(C(f"\n{C_CYAN}{B}DUNGEON CONTROLS{R}\n"))
-                    print(C(f"{C_GOLD}WASD{R}{C_DIM}/Arrows = move{R}"))
-                    print(C(f"{C_GOLD}[E]{R}{C_DIM} Enter/open chest when standing on it{R}"))
-                    print(C(f"{C_GOLD}[I]{R}{C_DIM} Quick bag — use potions, equip gear{R}"))
-                    print(C(f"{C_GOLD}[C]{R}{C_DIM} Encyclopedia — enemies, crafting guide{R}"))
-                    print(C(f"{C_GOLD}[Q]{R}{C_DIM} Retreat from the dungeon{R}"))
-                    input(C(f"\n{C_DIM}(Press Enter){R}"))
-                continue
-            if action[0] != "move":
-                continue
-            _, dx, dy = action
-            result = self.move(dx, dy)
-
-            if result == "blocked":
-                pass  # just re-render
-
-            elif result == "chest":
-                gold = random.randint(20,60)
-                player.gold += gold
-                loot = random.choice(list(ITEM_POOL.values()))()
-                player.add_item(loot)
-                print(C(f"\n{C_GOLD}Chest opened! +{gold} gold{R}, found {C_WHITE}{loot}{R}!"))
-                input(C(f"{C_DIM}(Press Enter){R}"))
-
-            elif result == "encounter":
-                enemy = generate_enemy("dungeon", self.danger, player.level)
-                # Stealth evasion in dungeon
-                if player.try_stealth_evade():
-                    print(C(f"\n{C_PURPLE}You hear {enemy.name} nearby... and press yourself into the shadows.{R}"))
-                    input(C(f"{C_DIM}(Press Enter){R}"))
-                    continue
-                first_strike = player.in_stealth
-                print()
-                print_sprite(enemy.name)
-                print(C(f"\n{C_RED}!! {enemy.name} emerges from the shadows!{R}"))
-                input(C(f"{C_DIM}(Press Enter to fight){R}"))
-                outcome = run_combat(player, enemy, first_strike=first_strike)
-                if outcome == "defeat": return "defeat"
-
-            elif result == "boss":
-                boss = create_boss(self.boss_name)
-                print()
-                print_sprite(boss.name)
-                print(C(f"\n{C_RED}{B}*** THE BOSS AWAITS: {boss.name} ***{R}"))
-                input(C(f"{C_DIM}(Press Enter to fight){R}"))
-                outcome = run_combat(player, boss, allow_escape=False)
-                if outcome == "defeat": return "defeat"
-                clear()
-                print(C(f"\n{C_GOLD}{B}★★★  DUNGEON CLEARED: {self.name}  ★★★{R}\n"))
-                player.flags[f"dungeon_cleared_{self.name}"] = True
-                input(C(f"{C_DIM}(Press Enter){R}")); return "cleared"
-
-            elif result == "exit":
-                print(C(f"\n{C_GREEN}You escaped from {self.name}.{R}"))
-                input(C(f"{C_DIM}(Press Enter){R}")); return "escaped"
-
-            if not player.is_alive(): return "defeat"
+# Dungeons live in game_dungeon.py (multi-floor). Kept for old imports.
+def Dungeon(name, danger=2, player_level=1, has_boss=False, boss_override=None, **_):
+    from game_dungeon import DungeonManager
+    return DungeonManager(name, danger=danger,
+                          boss_name=(boss_override if has_boss else None))

@@ -17,6 +17,8 @@ Passive regen:
   with party members healing too. Higher bedroom tier = faster recovery.
 """
 
+from __future__ import annotations
+
 import random, os, json
 from game_term import C, P, div, clr, W, H, hpbar, mpbar, box_top, box_mid, box_bot, get_size
 from game_lang import T, set_language, LANG, LANGUAGE_NAMES
@@ -28,7 +30,7 @@ _GREEN =_fg(80,200,80);  _RED  =_fg(220,60,60);   _CYAN =_fg(80,220,220)
 _YELL  =_fg(240,200,60); _PURP =_fg(180,80,220);  _ORAN =_fg(220,140,40)
 _TEAL  =_fg(60,200,180); _PINK =_fg(220,80,160)
 
-def _clear(): os.system("cls" if os.name == "nt" else "clear")
+def _clear(): clr()
 def _div(w=0): return C(f"{_DIM}{'─'*(w or max(40,W()-4))}{_R}")
 def _opt(key,lbl,hint=""):
     return (f"  {_GOLD}{_B}[{key}]{_R} {_WHITE}{lbl}{_R}"
@@ -117,10 +119,10 @@ ADVANCED_RECIPES = [
      "result":lambda: __import__('game_items').Equipment("Scale Mail","armor",hp_bonus=35,def_bonus=8,sell_value=90)},
     {"name":"Frost Amulet",      "tier":1,
      "needs":{"Frost Crystal":2},
-     "result":lambda: __import__('game_items').Equipment("Frost Amulet","accessory",mp_bonus=20,sell_value=70)},
+     "result":lambda: __import__('game_items').Equipment("Frost Amulet","amulet",mp_bonus=20,sell_value=70)},
     {"name":"Bone Shield",       "tier":1,
      "needs":{"Bone Shard":4,"Iron Ore":2},
-     "result":lambda: __import__('game_items').Equipment("Bone Shield","armor",hp_bonus=20,def_bonus=10,sell_value=85)},
+     "result":lambda: __import__('game_items').Equipment("Bone Shield","shield",hp_bonus=20,def_bonus=10,sell_value=85)},
     {"name":"Shadow Dagger",     "tier":1,
      "needs":{"Dark Shard":2,"Feather":1},
      "result":lambda: __import__('game_items').Equipment("Shadow Dagger","weapon",atk_bonus=9,stealth_bonus=4,sell_value=75)},
@@ -133,10 +135,10 @@ ADVANCED_RECIPES = [
      "result":lambda: __import__('game_items').Equipment("Frost Plate","armor",hp_bonus=50,def_bonus=14,sell_value=160)},
     {"name":"Shadow Crown",      "tier":2,
      "needs":{"Dark Shard":4,"Feather":2},
-     "result":lambda: __import__('game_items').Equipment("Shadow Crown","accessory",mp_bonus=25,stealth_bonus=8,sell_value=140)},
+     "result":lambda: __import__('game_items').Equipment("Shadow Crown","helmet",mp_bonus=25,stealth_bonus=8,sell_value=140)},
     {"name":"Berserker Bracer",  "tier":2,
      "needs":{"Iron Ore":5,"Wolf Pelt":3},
-     "result":lambda: __import__('game_items').Equipment("Berserker Bracer","accessory",atk_bonus=8,def_bonus=2,sell_value=130)},
+     "result":lambda: __import__('game_items').Equipment("Berserker Bracer","ring",atk_bonus=8,def_bonus=2,sell_value=130)},
     {"name":"Phoenix Elixir",    "tier":2,
      "needs":{"Frost Crystal":2,"Scale Fragment":2,"Feather":2},
      "result":lambda: __import__('game_items').Item("Phoenix Elixir","heal",150,80)},
@@ -152,24 +154,24 @@ ADVANCED_RECIPES = [
      "result":lambda: __import__('game_items').Equipment("Dragon Emperor Sword","weapon",atk_bonus=28,sell_value=400)},
     {"name":"Void Cloak",        "tier":3,
      "needs":{"Dark Shard":5,"Feather":3,"Frost Crystal":2},
-     "result":lambda: __import__('game_items').Equipment("Void Cloak","armor",hp_bonus=30,mp_bonus=30,stealth_bonus=12,sell_value=380)},
+     "result":lambda: __import__('game_items').Equipment("Void Cloak","cloak",hp_bonus=30,mp_bonus=30,stealth_bonus=12,sell_value=380)},
     {"name":"Titan Gauntlets",   "tier":3,
      "needs":{"Dragon Scale":2,"Iron Ore":8},
-     "result":lambda: __import__('game_items').Equipment("Titan Gauntlets","accessory",atk_bonus=10,def_bonus=8,sell_value=320)},
+     "result":lambda: __import__('game_items').Equipment("Titan Gauntlets","ring",atk_bonus=10,def_bonus=8,sell_value=320)},
     {"name":"God's Tear",        "tier":3,
      "needs":{"Dragon Scale":1,"Dark Shard":4,"Frost Crystal":3},
      "result":lambda: __import__('game_items').Item("God's Tear","heal",200,200)},
     {"name":"Eternal Compass",   "tier":3,
      "needs":{"Dragon Scale":1,"Feather":4,"Iron Ore":4},
-     "result":lambda: __import__('game_items').Equipment("Eternal Compass","accessory",mp_bonus=40,stealth_bonus=6,sell_value=350)},
+     "result":lambda: __import__('game_items').Equipment("Eternal Compass","amulet",mp_bonus=40,stealth_bonus=6,sell_value=350)},
     {"name":"War Titan Plate",   "tier":3,
      "needs":{"Dragon Scale":4,"Iron Ore":10,"Dark Shard":3},
      "result":lambda: __import__('game_items').Equipment("War Titan Plate","armor",hp_bonus=100,def_bonus=25,sell_value=500)},
     {"name":"Arcane Orb",        "tier":3,
      "needs":{"Dark Shard":5,"Frost Crystal":4},
-     "result":lambda: __import__('game_items').Equipment("Arcane Orb","accessory",mp_bonus=50,sell_value=420)},
+     "result":lambda: __import__('game_items').Equipment("Arcane Orb","amulet",mp_bonus=50,sell_value=420)},
     {"name":"Legendary God Potion","tier":3,
-     "needs":{"Dragon Scale":1,"God's Tear":1} if False else {"Dragon Scale":1,"Dark Shard":5},
+     "needs":{"Dragon Scale":1,"Dark Shard":5},
      "result":lambda: __import__('game_items').Item("God Potion","god",5,500)},
 ]
 
@@ -271,8 +273,9 @@ class PlayerBase:
 
         # Restore player
         old_hp = player.hp; old_mp = player.mp
-        player.hp = min(player.max_hp, int(player.max_hp * regen / 100))
-        player.mp = min(player.max_mp, int(player.max_mp * regen / 100))
+        # Restore UP TO regen% — never lower HP/MP that is already higher
+        player.hp = max(player.hp, min(player.max_hp, int(player.max_hp * regen / 100)))
+        player.mp = max(player.mp, min(player.max_mp, int(player.max_mp * regen / 100)))
         player.status_effects.clear()
         print(C(f"{_GREEN}HP restored: {old_hp} → {player.hp}{_R}"))
         print(C(f"{_CYAN}MP restored: {old_mp} → {player.mp}{_R}"))
@@ -292,8 +295,8 @@ class PlayerBase:
                 if t >= 4:
                     m.rest()
                 else:
-                    m.hp = min(m.max_hp, int(m.max_hp * regen / 100))
-                    m.mp = min(m.max_mp, int(m.max_mp * regen / 100))
+                    m.hp = max(m.hp, min(m.max_hp, int(m.max_hp * regen / 100)))
+                    m.mp = max(m.mp, min(m.max_mp, int(m.max_mp * regen / 100)))
                 print(C(f"  {m.name}: {old} → {m.hp} HP"))
 
         # Garden harvest
@@ -325,6 +328,8 @@ class PlayerBase:
             print(C(f"\n{_GOLD}🏆 Trophy bonus active: +{atk_b} ATK, +{def_b} DEF{_R}"))
 
         self.total_rests += 1
+        from game_systems import pass_day
+        pass_day(player)
         input(C(f"\n{_DIM}(Press Enter){_R}"))
 
     # ── Add trophy ────────────────────────────────────────────────
@@ -497,7 +502,7 @@ class BaseMenu:
         if not (0 <= idx < len(self.player.inventory)): return
         item = self.player.inventory.pop(idx)
         self.base.storage.append(item)
-        print(f"  {_GREEN}Deposited {item.name}.{_R}"); input(C(f"{_DIM}(Enter){_R}"))
+        print(C(f"{_GREEN}Deposited {item}.{_R}")); input(C(f"{_DIM}(Enter){_R}"))
 
     def _withdraw(self):
         if not self.base.storage:
@@ -507,9 +512,11 @@ class BaseMenu:
         if ch == "0" or not ch.isdigit(): return
         idx = int(ch)-1
         if not (0 <= idx < len(self.base.storage)): return
-        item = self.base.storage.pop(idx)
-        self.player.add_item(item)
-        print(f"  {_GREEN}Withdrew {item.name}.{_R}"); input(C(f"{_DIM}(Enter){_R}"))
+        item = self.base.storage[idx]
+        if not self.player.add_item(item):
+            input(C(f"{_DIM}(Enter){_R}")); return
+        self.base.storage.pop(idx)
+        print(C(f"{_GREEN}Withdrew {item}.{_R}")); input(C(f"{_DIM}(Enter){_R}"))
 
     # ── Upgrade menu ─────────────────────────────────────────────
 
@@ -520,10 +527,8 @@ class BaseMenu:
             print(C(f"{_DIM}Gold: {_GOLD}{self.player.gold}{_R}\n"))
 
             # Mat inventory
-            mat_count = {}
-            for it in self.player.inventory:
-                if it.item_type == "material":
-                    mat_count[it.name] = mat_count.get(it.name, 0) + 1
+            from game_items import material_counts
+            mat_count = material_counts(self.player.inventory)
 
             room_ids = list(ROOMS.keys())
             for i, rid in enumerate(room_ids, 1):
@@ -578,12 +583,9 @@ class BaseMenu:
                 print(f"  {_RED}Need {v}x {k}.{_R}"); input(C(f"{_DIM}(Enter){_R}")); return
         # Pay
         self.player.gold -= g_cost
+        from game_items import remove_items
         for mat_name, qty in m_cost.items():
-            removed = 0; new_inv = []
-            for it in self.player.inventory:
-                if it.name == mat_name and removed < qty: removed += 1
-                else: new_inv.append(it)
-            self.player.inventory = new_inv
+            remove_items(self.player.inventory, mat_name, qty)
         self.base.rooms[room_id] += 1
         print(C(f"\n{_GREEN}★ Built: {next_t['name']}!{_R}"))
         print(C(f"{_DIM}{next_t['desc']}{_R}"))
@@ -599,10 +601,8 @@ class BaseMenu:
 
         _clear()
         print(C(f"\n{_CYAN}{_B}════  WORKSHOP: {self.base.name}  ════{_R}\n"))
-        mat_count = {}
-        for it in self.player.inventory:
-            if it.item_type == "material":
-                mat_count[it.name] = mat_count.get(it.name, 0) + 1
+        from game_items import material_counts
+        mat_count = material_counts(self.player.inventory)
 
         print(C(f"{_DIM}Materials in bag:{_R}"))
         for m, q in mat_count.items():
@@ -632,12 +632,9 @@ class BaseMenu:
         idx = int(ch)-1
         if not (0 <= idx < len(available)): return
         rec = available[idx]
+        from game_items import remove_items
         for mat_name, qty in rec["needs"].items():
-            removed = 0; new_inv = []
-            for it in self.player.inventory:
-                if it.name == mat_name and removed < qty: removed += 1
-                else: new_inv.append(it)
-            self.player.inventory = new_inv
+            remove_items(self.player.inventory, mat_name, qty)
         result = rec["result"]()
         self.player.add_item(result)
         print(C(f"\n{_GREEN}Crafted: {result}!{_R}"))
@@ -724,10 +721,8 @@ def buy_plot_in_city(player, town_name, continent_id, x, y):
     print(C(f"{_opt('1', f'Buy pre-built plot', f'{PLOT_COST_GOLD} gold')}"))
 
     # Check if can build from materials
-    mat_count = {}
-    for it in player.inventory:
-        if it.item_type == "material":
-            mat_count[it.name] = mat_count.get(it.name, 0) + 1
+    from game_items import material_counts
+    mat_count = material_counts(player.inventory)
     can_build = all(mat_count.get(k, 0) >= v for k,v in PLOT_BUILD_MATS.items())
     build_col = _GREEN if can_build else _DIM
     print(C(f"{_opt('2', 'Build from materials', mat_str)}"))
@@ -750,12 +745,9 @@ def buy_plot_in_city(player, town_name, continent_id, x, y):
         if not can_build:
             print(C(f"\n{_RED}Not enough materials.{_R}"))
             input(C(f"{_DIM}(Enter){_R}")); return False
+        from game_items import remove_items
         for mat_name, qty in PLOT_BUILD_MATS.items():
-            removed = 0; new_inv = []
-            for it in player.inventory:
-                if it.name == mat_name and removed < qty: removed += 1
-                else: new_inv.append(it)
-            player.inventory = new_inv
+            remove_items(player.inventory, mat_name, qty)
         _create_base(player, plot_name, town_name, continent_id, x, y)
         return True
 
@@ -768,10 +760,8 @@ def build_base_on_map(player, x, y, continent_id):
         print(C(f"\n{_DIM}You already have a base on this continent.{_R}"))
         input(C(f"{_DIM}(Enter){_R}")); return False
 
-    mat_count = {}
-    for it in player.inventory:
-        if it.item_type == "material":
-            mat_count[it.name] = mat_count.get(it.name, 0) + 1
+    from game_items import material_counts
+    mat_count = material_counts(player.inventory)
     can_build = all(mat_count.get(k, 0) >= v for k,v in PLOT_BUILD_MATS.items())
 
     _clear()
@@ -789,12 +779,9 @@ def build_base_on_map(player, x, y, continent_id):
     ch = input(C(f"\n{_opt('Y','Build here')}  {_opt('N','Cancel')}\n  {_GOLD}>{_R} ")).strip().lower()
     if ch != "y": return False
 
+    from game_items import remove_items
     for mat_name, qty in PLOT_BUILD_MATS.items():
-        removed = 0; new_inv = []
-        for it in player.inventory:
-            if it.name == mat_name and removed < qty: removed += 1
-            else: new_inv.append(it)
-        player.inventory = new_inv
+        remove_items(player.inventory, mat_name, qty)
 
     plot_name = PLOT_NAMES.get(continent_id, "Wilderness Outpost")
     _create_base(player, plot_name, "Wilderness", continent_id, x, y)

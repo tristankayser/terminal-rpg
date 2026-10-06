@@ -1,5 +1,12 @@
 import random, copy
 
+def _C(text=""):
+    try:
+        from game_term import C
+        return C(text)
+    except ImportError:
+        return text
+
 # ═══════════════════════════════════════════════════════════════
 # STATUS EFFECTS
 # ═══════════════════════════════════════════════════════════════
@@ -18,7 +25,7 @@ class Poison(StatusEffect):
         super().__init__("Poison", duration); self.damage = damage
     def on_turn_start(self, target):
         target.hp = max(0, target.hp - self.damage)
-        print(f"  [X] {target.name} takes {self.damage} poison damage!")
+        print(_C(f"[X] {target.name} takes {self.damage} poison damage!"))
     def to_dict(self): return {"type":"Poison","duration":self.duration,"damage":self.damage}
 
 class Burn(StatusEffect):
@@ -26,7 +33,7 @@ class Burn(StatusEffect):
         super().__init__("Burn", duration); self.damage = damage
     def on_turn_start(self, target):
         target.hp = max(0, target.hp - self.damage)
-        print(f"  [~] {target.name} burns for {self.damage} damage!")
+        print(_C(f"[~] {target.name} burns for {self.damage} damage!"))
     def to_dict(self): return {"type":"Burn","duration":self.duration,"damage":self.damage}
 
 class Regen(StatusEffect):
@@ -34,7 +41,8 @@ class Regen(StatusEffect):
         super().__init__("Regen", duration); self.heal = heal
     def on_turn_start(self, target):
         old = target.hp; target.hp = min(target.max_hp, target.hp + self.heal)
-        print(f"  [+] {target.name} regenerates {target.hp - old} HP!")
+        if target.hp > old:
+            print(_C(f"[+] {target.name} regenerates {target.hp - old} HP!"))
     def to_dict(self): return {"type":"Regen","duration":self.duration,"heal":self.heal}
 
 class Stun(StatusEffect):
@@ -63,41 +71,47 @@ class Skill:
         self.status_chance=status_chance; self.description=description
         self.heal_ally = heal_ally   # True = healer will use this on party members
 
-    def can_use(self, user):
-        return user.mp >= self.mana_cost or user.hp > (self.mana_cost - user.mp)
-
     def pay_cost(self, user):
         if user.mp >= self.mana_cost:
             user.mp -= self.mana_cost
         else:
+            # Force-cast: the missing MP is paid with HP, but it can never
+            # kill the caster (that used to be a silent suicide button).
             overflow = self.mana_cost - user.mp
-            user.mp = 0; user.hp -= overflow
-            try:
-                from game_term import C as _pC
-            except ImportError:
-                _pC = lambda x: x
-            print(_pC(f"[!] {user.name} force-casts {self.name}, burning {overflow} HP!"))
+            user.mp = 0; user.hp = max(1, user.hp - overflow)
+            print(_C(f"[!] {user.name} force-casts {self.name}, burning {overflow} HP!"))
+
+    def can_use(self, user):
+        """MP is enough, or HP can cover the shortfall and still leave 1 HP."""
+        return user.mp >= self.mana_cost or user.hp > (self.mana_cost - user.mp)
 
     def use(self, user, target=None):
-        try:
-            from game_term import C as _C
-        except ImportError:
-            _C = lambda x: x
         if not self.can_use(user):
-            print(_C(f"Not enough MP to use {self.name}!")); return False
+            print(_C(f"Not enough MP (or HP) to use {self.name}!")); return False
         self.pay_cost(user)
         if self.damage > 0 and target:
             if target.try_dodge():
                 print(_C(f"{target.name} dodged {self.name}!")); return True
-            base = self.damage + user.atk + user.job.skill_power_bonus + user.get_equip_atk_bonus()
+            power = user.job.skill_power_bonus
+            if hasattr(user, "party_skill_power"):
+                power += user.party_skill_power()
+            atk = user.combat_atk() if hasattr(user, "combat_atk") else user.atk
+            base = self.damage + atk + power
             crit, dmg = user.calc_crit(base)
-            target.take_damage(dmg)
+            dealt = target.take_damage(dmg)
             tag = " [CRIT!]" if crit else ""
-            print(_C(f"(*) {user.name} used {self.name}{tag} → {dmg} damage!"))
+            print(_C(f"(*) {user.name} used {self.name}{tag} → {dealt} damage!"))
+            if crit:
+                try:
+                    from game_customise import tick_legendary_quest as _tlq
+                    _tlq(user, "crit_hit")
+                except Exception: pass
             if self.status_effect and random.randint(1,100) <= self.status_chance:
                 target.add_status(copy.deepcopy(self.status_effect))
         elif self.heal > 0:
             amount = self.heal + user.job.heal_power_bonus
+            if hasattr(user, "heal_power_extra"):
+                amount += user.heal_power_extra()
             old = user.hp; user.hp = min(user.max_hp, user.hp + amount)
             healed = user.hp - old
             print(_C(f"(+) {user.name} used {self.name} → healed {healed} HP!"))
@@ -108,6 +122,12 @@ class Skill:
                 _tlq(user,"hp_healed",healed)
                 if user.hp >= user.max_hp: _tlq(user,"full_heal")
             except Exception: pass
+        elif self.status_effect:
+            # Pure buff skills (Battle Cry, Taunt) — apply to self.
+            # These used to do nothing at all except cost MP.
+            if random.randint(1,100) <= self.status_chance:
+                user.add_status(copy.deepcopy(self.status_effect))
+            print(_C(f"(+) {user.name} used {self.name}!"))
         return True
 
     def __repr__(self):
@@ -148,8 +168,8 @@ class ItemStack:
     def total_sell(self):
         return self.sell_value * self.qty
 
-    def use(self, player):
-        result = self.item.use(player)
+    def use(self, player, in_combat=False):
+        result = self.item.use(player, in_combat)
         if result:
             self.qty -= 1
         return result
@@ -173,30 +193,41 @@ class Item:
         self.name=name; self.item_type=item_type
         self.value=value; self.sell_value=sell_value or max(1,value//2)
 
-    def use(self, player):
-        try:
-            from game_term import C as _C
-        except ImportError:
-            _C = lambda x: x
+    # Extra MP restored by combo potions (they are typed "heal")
+    COMBO_MP = {"Tincture": 25, "Hero's Brew": 50}
+
+    def use(self, player, in_combat=False):
         if self.item_type == "heal":
-            old=player.hp; player.hp=min(player.max_hp,player.hp+self.value)
-            print(_C(f"Used {self.name}: restored {player.hp-old} HP.")); return True
+            amount = self.value + getattr(player, "_potion_bonus", 0)
+            old=player.hp; player.hp=min(player.max_hp,player.hp+amount)
+            msg = f"Used {self.name}: restored {player.hp-old} HP"
+            extra_mp = self.COMBO_MP.get(self.name, 0)
+            if extra_mp:
+                oldm = player.mp; player.mp = min(player.max_mp, player.mp + extra_mp)
+                msg += f" and {player.mp-oldm} MP"
+            if self.name == "Regen Tonic":
+                player.add_status(Regen(duration=3, heal=10))
+            print(_C(msg + ".")); return True
         if self.item_type == "mana":
             old=player.mp; player.mp=min(player.max_mp,player.mp+self.value)
             print(_C(f"Used {self.name}: restored {player.mp-old} MP.")); return True
         if self.item_type == "god":
             print(_C(f"{self.name} activates automatically at 0 HP!")); return False
         if self.item_type == "antidote":
-            cured = [s for s in player.status_effects if s.name in ("Poison","Burn")]
+            bad = ("Poison","Burn","Stun") if self.name == "Holy Water" else ("Poison","Burn")
+            cured = [s for s in player.status_effects if s.name in bad]
+            if not cured:
+                print(_C(f"You have no ailments that {self.name} can cure.")); return False
             for s in cured: player.status_effects.remove(s)
-            print(_C(f"Used {self.name}: cured {len(cured)} status effect(s).")); return True
+            print(_C(f"Used {self.name}: cured {', '.join(s.name for s in cured)}.")); return True
         if self.item_type == "bomb":
-            # Returns True so caller knows it was used; actual dmg applied by combat
+            if not in_combat:
+                print(_C(f"{self.name} can only be thrown in battle.")); return False
+            # Actual effect is applied by the combat engine
             print(_C(f"Threw {self.name}!")); return True
         if self.item_type == "buff":
-            # Short ATK/DEF buff stored on player flags
             player.temp_atk_buff  = getattr(player,"temp_atk_buff",0)  + self.value
-            player.temp_atk_turns = getattr(player,"temp_atk_turns",0) + 3
+            player.temp_atk_turns = max(getattr(player,"temp_atk_turns",0), 3)
             print(_C(f"Used {self.name}: ATK+{self.value} for 3 turns!")); return True
         print(_C("Can't use that here.")); return False
 
@@ -254,9 +285,24 @@ class Equipment(Item):
                 "allowed_classes":self.allowed_classes,"rarity":self.rarity,
                 "description":self.description}
 
+    VALID_SLOTS = ("weapon","armor","helmet","shield","cloak","ring","amulet")
+
+    @staticmethod
+    def fix_slot(name, slot):
+        """Old workshop recipes produced an 'accessory' slot that can't be
+        equipped (and vanished on reload). Map it to a real slot."""
+        if slot in Equipment.VALID_SLOTS:
+            return slot
+        n = name.lower()
+        if "crown" in n or "helm" in n: return "helmet"
+        if "cloak" in n:                return "cloak"
+        if "shield" in n:               return "shield"
+        if any(k in n for k in ("amulet", "orb", "compass", "pendant")): return "amulet"
+        return "ring"
+
     @staticmethod
     def from_dict(d):
-        return Equipment(d["name"],d["slot"],d.get("hp_bonus",0),
+        return Equipment(d["name"],Equipment.fix_slot(d["name"], d["slot"]),d.get("hp_bonus",0),
                          d.get("atk_bonus",0),d.get("mp_bonus",0),
                          d.get("def_bonus",0),d.get("sell_value",0),
                          d.get("stealth_bonus",0),
@@ -330,16 +376,67 @@ def inventory_remove(inventory, index, qty=1):
         return inventory.pop(index)
 
 
-def sell_all_materials(inventory, player):
+def entry_qty(entry):
+    """Quantity represented by one inventory entry (stack or single item)."""
+    return entry.qty if isinstance(entry, ItemStack) else 1
+
+
+def entry_item(entry):
+    """The underlying Item/Equipment of an inventory entry."""
+    return entry.item if isinstance(entry, ItemStack) else entry
+
+
+def item_count(inventory, name):
+    """Total quantity of a named item across all stacks."""
+    return sum(entry_qty(e) for e in inventory if e.name == name)
+
+
+def material_counts(inventory):
+    """{material_name: total_qty} — stack-aware."""
+    counts = {}
+    for e in inventory:
+        if e.item_type == "material":
+            counts[e.name] = counts.get(e.name, 0) + entry_qty(e)
+    return counts
+
+
+def remove_items(inventory, name, qty):
+    """Remove qty of a named item (across stacks). Returns how many were removed."""
+    removed = 0
+    i = 0
+    while i < len(inventory) and removed < qty:
+        e = inventory[i]
+        if e.name != name:
+            i += 1; continue
+        if isinstance(e, ItemStack):
+            take = min(e.qty, qty - removed)
+            e.qty -= take; removed += take
+            if e.qty <= 0:
+                inventory.pop(i); continue
+        else:
+            inventory.pop(i); removed += 1; continue
+        i += 1
+    return removed
+
+
+def use_entry(inventory, index, player, in_combat=False):
+    """Use ONE item from the entry at index. Removes empty stacks. Returns bool."""
+    if not (0 <= index < len(inventory)):
+        return False
+    e = inventory[index]
+    ok = e.use(player, in_combat)
+    if ok and (not isinstance(e, ItemStack) or e.qty <= 0):
+        inventory.remove(e)
+    return ok
+
+
+def sell_all_materials(inventory, player, mult=1.0):
     """Sell all material-type stacks. Returns total gold earned."""
     total = 0
     to_remove = []
     for i, entry in enumerate(inventory):
-        if isinstance(entry, ItemStack) and entry.item.item_type == "material":
-            total += entry.total_sell()
-            to_remove.append(i)
-        elif isinstance(entry, Item) and entry.item_type == "material":
-            total += entry.sell_value
+        if entry.item_type == "material":
+            total += int(entry_item(entry).sell_value * mult) * entry_qty(entry)
             to_remove.append(i)
     for i in reversed(to_remove):
         inventory.pop(i)
@@ -347,17 +444,14 @@ def sell_all_materials(inventory, player):
     return total
 
 
-def sell_all_consumables(inventory, player):
+def sell_all_consumables(inventory, player, mult=1.0):
     """Sell all consumable stacks. Returns total gold earned."""
     total = 0
     to_remove = []
     consumable_types = {"heal","mana","antidote","bomb","buff"}
     for i, entry in enumerate(inventory):
-        if isinstance(entry, ItemStack) and entry.item.item_type in consumable_types:
-            total += entry.total_sell()
-            to_remove.append(i)
-        elif isinstance(entry, Item) and entry.item_type in consumable_types:
-            total += entry.sell_value
+        if entry.item_type in consumable_types:
+            total += int(entry_item(entry).sell_value * mult) * entry_qty(entry)
             to_remove.append(i)
     for i in reversed(to_remove):
         inventory.pop(i)
@@ -563,6 +657,22 @@ LOOT_TABLE = {
     "Goblin King":   [("Bone Shard",1.0),("Iron Ore",0.80),("Power Ring",0.15)],
     "Shadow Lord":   [("Dark Shard",1.0),("Dragon Scale",0.40),("Phoenix Pendant",0.05)],
 }
+
+LOOT_TABLE.update({
+    # Enemies that previously fell back to the generic 20% potion
+    "Rock Wolf":     [("Wolf Pelt",0.45),("Iron Ore",0.35),("Potion",0.20)],
+    "Dust Imp":      [("Ether",0.40),("Scale Fragment",0.25),("Smoke Bomb",0.08)],
+    "Snow Beast":    [("Frost Crystal",0.45),("Wolf Pelt",0.30),("Hi-Potion",0.10)],
+    "Ice Golem":     [("Frost Crystal",0.55),("Iron Ore",0.40),("Obsidian Shard",0.15)],
+    "Dark Golem":    [("Obsidian Shard",0.50),("Dark Shard",0.35),("Iron Ore",0.40)],
+    "Death Knight":  [("Dark Shard",0.50),("Runic Stone",0.25),("Steel Shield",0.05)],
+    "Lich":          [("Mana Stone",0.50),("Holy Relic",0.20),("Hi-Ether",0.30)],
+    "Void Stalker":  [("Shadow Cloth",0.50),("Dark Shard",0.35),("Shadow Cloak",0.04)],
+    "Dungeon Warden":[("Runic Stone",1.0),("Holy Relic",0.50),("Titan Ring",0.10)],
+    "Shadow Lich":   [("Mana Stone",1.0),("Holy Relic",0.60),("Phoenix Feather",0.10)],
+    "Vaeltharion":   [("Dragon Scale",1.0),("God Potion",0.50),("Phoenix Feather",0.30)],
+    "Dragon":        [("Dragon Scale",1.0),("God Potion",0.50),("Dragon Ring",0.25),("Phoenix Feather",0.30)],
+})
 
 def roll_drops(enemy_name):
     table = LOOT_TABLE.get(enemy_name,[("Potion",0.20)])

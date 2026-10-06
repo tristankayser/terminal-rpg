@@ -11,6 +11,10 @@ FIXES:
 import random, copy
 from game_items import StatusEffect, Poison, Burn, Regen, Stun, roll_drops
 
+def _C(text=""):
+    from game_term import C
+    return C(text)
+
 # =============================================================
 # ENEMY BASE
 # =============================================================
@@ -66,11 +70,14 @@ class Enemy:
                 self.status_effects.remove(e)
 
     def basic_attack(self, target):
+        if hasattr(target, "try_dodge") and target.try_dodge():
+            print(_C(f"{target.name} dodges {self.name}'s attack!"))
+            return 0
         base = max(1, self.atk + random.randint(-2, 3))
         crit, dmg = self.calc_crit(base)
         actual = target.take_damage(dmg)
         tag = " [CRIT!]" if crit else ""
-        print(f"  {self.name} attacks{tag} -> {actual} damage!")
+        print(_C(f"{self.name} attacks{tag} -> {actual} damage!"))
         return actual
 
     def hp_bar(self, width=20):
@@ -96,41 +103,47 @@ class BossEnemy(Enemy):
         self.boss_skills = boss_skills or []
         self.phase = 1
 
+    SKILL_CHANCE = 40   # % of turns a boss uses a special move (was 100%)
+
     def use_boss_skill(self, target):
-        if not self.boss_skills:
+        if self.hp < self.max_hp * 0.5 and self.phase == 1:
+            self.phase = 2
+            self.atk = int(self.atk * 1.25)
+            print(_C(f"*** {self.name} ENTERS PHASE 2 — power surges! ***"))
+
+        if not self.boss_skills or random.randint(1, 100) > self.SKILL_CHANCE:
             self.basic_attack(target)
             return
 
-        if self.hp < self.max_hp * 0.5 and self.phase == 1:
-            self.phase = 2
-            self.atk = int(self.atk * 1.3)
-            print(f"\n  *** {self.name} ENTERS PHASE 2 — power surges! ***\n")
-
         skill = random.choice(self.boss_skills)
+        # Roar cannot stun-lock: re-roll it if the target is already stunned
+        if skill == "roar" and any(e.name == "Stun" for e in target.status_effects):
+            skill = "power_strike"
+        scale = max(1, self.atk // 10)   # status damage grows with the boss
         if skill == "power_strike":
-            dmg = self.atk * 2 + random.randint(5, 15)
+            dmg = int(self.atk * 1.6) + random.randint(3, 8)
             actual = target.take_damage(dmg)
-            print(f"  {self.name} uses POWER STRIKE -> {actual} damage!")
+            print(_C(f"{self.name} uses POWER STRIKE -> {actual} damage!"))
         elif skill == "venom":
-            target.add_status(copy.deepcopy(Poison(duration=3, damage=8)))
-            print(f"  {self.name} spits venom!")
+            target.add_status(Poison(duration=3, damage=3 + scale))
+            print(_C(f"{self.name} spits venom! (Poison)"))
         elif skill == "roar":
-            target.add_status(copy.deepcopy(Stun(duration=1)))
-            print(f"  {self.name} ROARS — you are stunned!")
+            target.add_status(Stun(duration=1))
+            print(_C(f"{self.name} ROARS — you are stunned!"))
         elif skill == "drain":
             dmg = max(1, self.atk)
             actual = target.take_damage(dmg)
             self.hp = min(self.max_hp, self.hp + actual // 2)
-            print(f"  {self.name} DRAINS {actual} HP from you!")
+            print(_C(f"{self.name} DRAINS {actual} HP from you!"))
         elif skill == "fire_breath":
-            dmg = self.atk + random.randint(10, 30)
+            dmg = self.atk + random.randint(5, 15)
             actual = target.take_damage(dmg)
-            target.add_status(copy.deepcopy(Burn(duration=3, damage=10)))
-            print(f"  {self.name} breathes FIRE — {actual} damage + BURN!")
+            target.add_status(Burn(duration=3, damage=3 + scale))
+            print(_C(f"{self.name} breathes FIRE — {actual} damage + BURN!"))
         elif skill == "wing_slam":
-            dmg = int(self.atk * 1.6)
+            dmg = int(self.atk * 1.4)
             actual = target.take_damage(dmg)
-            print(f"  {self.name} WING SLAMS for {actual} damage!")
+            print(_C(f"{self.name} WING SLAMS for {actual} damage!"))
         else:
             self.basic_attack(target)
 
@@ -193,23 +206,26 @@ def _floor_scale(floor: int) -> float:
     return 1.0 + max(0, floor - 1) * 0.15
 
 
-def generate_enemy(zone="plains", danger=1, player_level=1, floor=1):
+def generate_enemy(zone="plains", danger=1, player_level=1, floor=1, name=None):
     """
     Generate a scaled enemy.
     zone: see ZONE_ENEMIES keys.
     danger: 1–5 base danger rating of the location.
     player_level: scales stats.
     floor: dungeon floor depth (1=surface, increases as deeper).
+    name: force a specific enemy type (e.g. the overworld sprite you bumped into).
     """
     names = ZONE_ENEMIES.get(zone, ["Goblin"])
-    name  = random.choice(names)
+    name  = name or random.choice(names)
     stats = ENEMY_STATS.get(name, {})
 
     floor_mult = _floor_scale(floor)
-    scale = (danger + player_level * 0.3) * floor_mult
+    # Level now matters much more than before (0.3/level made enemies trivial
+    # after the first few levels while the player gained +15 HP / +2 ATK each).
+    scale = (danger * 0.8 + player_level * 0.9) * floor_mult
 
-    base_hp  = int((20 + scale * 10) * stats.get("hp_m",  1.0)) + random.randint(0, 6)
-    base_atk = int((4  + scale * 2)  * stats.get("atk_m", 1.0)) + random.randint(0, 2)
+    base_hp  = int((25 + scale * 16) * stats.get("hp_m",  1.0)) + random.randint(0, 6)
+    base_atk = int((5  + scale * 2.8) * stats.get("atk_m", 1.0)) + random.randint(0, 2)
     base_def = int((1  + scale * 1.0)* stats.get("def_m", 1.0))
     base_exp = int((10 + scale * 8)  * stats.get("exp_m", 1.0))
     base_gld = int((5  + scale * 5)  * stats.get("gold_m",1.0))
@@ -287,10 +303,37 @@ BOSS_DEFS = {
 }
 
 # These bosses CANNOT appear as random encounters — ever.
-STORY_ONLY_BOSSES = {"Dragon", "Vaeltharion", "Frost Dragon"}
+STORY_ONLY_BOSSES = {"Dragon", "Vaeltharion"}
 
-def create_boss(name):
-    d = BOSS_DEFS.get(name, BOSS_DEFS["Goblin King"])
+# Relative toughness of each boss. Stats are derived from the player's level
+# so a boss is always a real fight but never an unwinnable wall (the old fixed
+# stats meant a Lv 3 hero could meet a 1200 HP dragon in their first dungeon).
+BOSS_POWER = {
+    "Goblin King":    1.00,
+    "Dungeon Warden": 1.10,
+    "Shadow Lich":    1.15,
+    "Frost Dragon":   1.25,
+    "Shadow Lord":    1.30,
+    "Dragon":         1.38,
+    "Vaeltharion":    1.38,
+}
+
+# Regular dungeons never roll these
+RANDOM_BOSS_POOL = [n for n in BOSS_DEFS if n not in STORY_ONLY_BOSSES]
+
+
+def create_boss(name, player_level=None):
+    d = dict(BOSS_DEFS.get(name, BOSS_DEFS["Goblin King"]))
+    if player_level is not None:
+        lv = max(1, player_level)
+        p  = BOSS_POWER.get(name, 1.0)
+        # Power scales HP fully but ATK only by its square root: tougher
+        # bosses take longer to kill without one-shotting the player.
+        d["hp"]          = int((110 + 24 * lv) * p)
+        d["atk"]         = int((9 + 2.9 * lv) * p ** 0.5)
+        d["defense"]     = int((4 + 1.0 * lv) * p ** 0.5)
+        d["exp_reward"]  = int((120 + 45 * lv) * p)
+        d["gold_reward"] = int((90 + 30 * lv) * p)
     return BossEnemy(name, **d)
 
 

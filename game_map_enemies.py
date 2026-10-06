@@ -38,9 +38,12 @@ ZONE_ENEMY_POOL = {
 
 TERRAIN_ZONE = {
     ".": "plains", "T": "forest", "^": "mountain",
-    "D": "desert", "*": "snow",   ",": "plains",
-    "/": "plains", "=": "plains",
+    "*": "snow",   ",": "plains", "/": "plains", "=": "plains",
 }
+# Sand (":") is beach on most continents; on the Ash Sands it is real desert.
+# (The old table looked for a "D" tile that never exists, so desert
+#  monsters never spawned on the map.)
+DESERT_CONTINENT = "D"
 
 
 class MapEnemy:
@@ -65,6 +68,16 @@ class MapEnemy:
         self.chase_target  = None   # (px, py) last known player pos
         self.level         = max(1, self.danger + random.randint(0,2))
         self.alert_cooldown= 0      # turns to keep chasing after losing sight
+        self.calm_turns    = 0      # turns it ignores the player (after you escape/evade it)
+
+    def calm(self, turns=6):
+        """Stop chasing and leave the player alone for a few turns.
+        Without this, an enemy you fled from or slipped past stayed adjacent
+        and re-triggered a fight on your very next step."""
+        self.chasing = False
+        self.chase_target = None
+        self.alert_cooldown = 0
+        self.calm_turns = turns
 
     @property
     def display(self):
@@ -90,6 +103,10 @@ class MapEnemy:
         Called once per player move.
         Returns True if the enemy is now adjacent to the player (triggers encounter).
         """
+        if self.calm_turns > 0:
+            self.calm_turns -= 1
+            self._patrol(terrain_grid, width, height)
+            return False
         if self.can_see_player(px, py, player_stealth):
             self.chasing = True
             self.chase_target = (px, py)
@@ -134,7 +151,8 @@ class MapEnemy:
     def _walkable(self, x, y, terrain, width, height):
         if not (0 <= x < width and 0 <= y < height):
             return False
-        return terrain[y][x] not in ("~", "#")
+        # Ocean, shallows and location tiles (towns, dungeons...) are off-limits
+        return terrain[y][x] not in ("~", ";", "#", "P", "H", "X", "R", "M", "V")
 
     def to_dict(self):
         return {
@@ -158,21 +176,23 @@ class MapEnemy:
         return e
 
 
-def spawn_world_enemies(locations, terrain, width, height, count=18):
+def spawn_world_enemies(locations, terrain, width, height, count=18, cont_map=None):
     """
     Populate the world map with patrolling enemies.
-    Avoids spawning on cities/ports.
+    Avoids spawning on or right next to towns and other locations.
     """
-    city_positions = {(l["x"], l["y"]) for l in locations if l["type"] in ("city","port")}
+    loc_positions = {(l["x"], l["y"]) for l in locations}
 
-    # Collect walkable non-city land tiles grouped by zone
+    # Collect walkable non-location land tiles grouped by zone
     zone_tiles = {}
     for y in range(height):
         for x in range(width):
             ch = terrain[y][x]
-            if ch in ("~","P","H","X","R","B","E","T_loc") or (x,y) in city_positions:
+            if any((x+dx, y+dy) in loc_positions for dx in (-1,0,1) for dy in (-1,0,1)):
                 continue
             zone = TERRAIN_ZONE.get(ch)
+            if ch == ":" and cont_map is not None and cont_map[y][x] == DESERT_CONTINENT:
+                zone = "desert"
             if zone:
                 zone_tiles.setdefault(zone, []).append((x,y))
 
@@ -204,7 +224,7 @@ def spawn_world_enemies(locations, terrain, width, height, count=18):
             py = cy + random.randint(-3, 3)
             px = max(1, min(width-2, px))
             py = max(1, min(height-2, py))
-            if terrain[py][px] not in ("~",):
+            if terrain[py][px] not in ("~", ";"):
                 patrol.append((px, py))
 
         enemies.append(MapEnemy(name, cx, cy, patrol))

@@ -48,7 +48,21 @@ def mpbar(c,m,w=None):
     w=w or max(8,min(16,W()//7))
     frac=c/m if m else 0; f=int(w*frac)
     return f"[{C_BLUE}{'█'*f}{C_DIM}{'░'*(w-f)}{R_}] {C_BLUE}{c}/{m}{R_}"
-def clear(): os.system("cls" if os.name == "nt" else "clear")
+from game_term import clr as clear, draw_frame
+
+# Dungeon difficulty and bosses per continent / dungeon name
+CONTINENT_DANGER = {"A": 1, "E": 2, "B": 3, "D": 3, "C": 4}
+DUNGEON_BOSSES = {
+    "Wolf Den": "Goblin King",       "Mosshaven Ruins": "Dungeon Warden",
+    "Blackroot Crypt": "Shadow Lich",
+    "Deep Mines": "Dungeon Warden",  "Shattered Peak": "Goblin King",
+    "Forge Depths": "Shadow Lich",
+    "Ice Cavern": "Frost Dragon",    "Frozen Vault": "Shadow Lich",
+    "Sand Tomb": "Shadow Lord",      "Dust Shrine": "Dungeon Warden",
+    "Scorpion Den": "Goblin King",
+    "Sea Cavern": "Shadow Lich",     "Tide Tomb": "Dungeon Warden",
+}
+MIN_MAP_ENEMIES = 30
 
 WIDTH=320; HEIGHT=120
 SAVE_FILE="world_save.json"
@@ -121,6 +135,10 @@ class WorldMap:
         self._generate()
         self._place_player_near_city()
         self._spawn_enemies()
+        # The world layout is seeded, but gameplay randomness must not be:
+        # otherwise every load of a save replays the exact same "random"
+        # fights, loot and events.
+        random.seed()
 
     # ── GENERATION ──────────────────────────────────────────────
 
@@ -144,6 +162,33 @@ class WorldMap:
         self._place_roads()
         self._place_ships()
         self._compute_cont_labels()
+        # Must stay LAST: anything that consumes random numbers before this
+        # point defines the map layout that old save files rely on.
+        self._place_ruins()
+
+    RUIN_NAMES = {
+        "A": ["Old Watchtower", "Elderwood Shrine"],
+        "B": ["Fallen Forge", "Giant's Stair"],
+        "C": ["Frozen Chapel", "Icebound Keep"],
+        "D": ["Buried Obelisk", "Sunken Bazaar"],
+        "E": ["Coral Temple", "Wreck of the Gull"],
+    }
+
+    def _place_ruins(self):
+        """Ruins were on the map legend but never generated."""
+        for cont in CONTINENTS:
+            cid=cont["id"]
+            land=[(x,y) for y in range(HEIGHT) for x in range(WIDTH)
+                  if self.cont_map[y][x]==cid and self.terrain[y][x] in (PLAINS,FOREST,HILL)]
+            if not land: continue
+            for name in self.RUIN_NAMES.get(cid,[]):
+                for _ in range(60):
+                    lx,ly=random.choice(land)
+                    if not any(abs(l["x"]-lx)<5 and abs(l["y"]-ly)<5 for l in self.locations):
+                        self.terrain[ly][lx]="R"
+                        self.locations.append({"type":"ruins","icon":"R","name":name,
+                                               "x":lx,"y":ly,"continent":cid,"region":cid})
+                        break
 
     def _gen_continents(self):
         for cont in CONTINENTS:
@@ -353,7 +398,7 @@ class WorldMap:
     def _spawn_enemies(self):
         from game_map_enemies import spawn_world_enemies
         self.map_enemies=spawn_world_enemies(
-            self.locations,self.terrain,WIDTH,HEIGHT,count=40)
+            self.locations,self.terrain,WIDTH,HEIGHT,count=40,cont_map=self.cont_map)
 
     def _reveal(self,radius=6):
         for dy in range(-radius,radius+1):
@@ -371,57 +416,44 @@ class WorldMap:
         cols,rows=sz.columns,sz.lines
 
         # ─────────────────────────────────────────────────────────────────
-        # LAYOUT  (matches diagram):
-        #   ROW 0       : top divider
-        #   ROW 1       : TITLE BAR  — game title + turn + player status
-        #   ROW 2       : divider
-        #   ROWS 3…N-4  : MAP  (fills as much vertical space as possible)
-        #   ROW N-3     : divider
-        #   ROW N-2     : terrain / location / nearby enemies / story hint
-        #   ROW N-1     : controls hint
-        #   ROW N       : last message  /  typing prompt  ›
+        # LAYOUT:
+        #   top divider · title bar · divider
+        #   MAP (fills as much vertical space as possible)
+        #   divider · info line · controls · last message
+        # The whole frame is written in one go (cursor-home + overwrite),
+        # so walking around no longer flickers.
         # ─────────────────────────────────────────────────────────────────
-        TOP_ROWS    = 3   # top-div + title + div
-        BOTTOM_ROWS = 4   # div + info + controls + msg/prompt
-        view_h = max(6, min(rows - TOP_ROWS - BOTTOM_ROWS, HEIGHT))
+        TOP_ROWS    = 3
+        BOTTOM_ROWS = 4
+        view_h = max(6, min(rows - TOP_ROWS - BOTTOM_ROWS - 1, HEIGHT))
 
-        # Cap content at 120 visible chars — wider terminals get centred padding.
-        # This prevents terminal line-wrap from ANSI code inflation at large sizes.
         MAX_MAP_W  = 120
-        content_w  = min(cols, MAX_MAP_W)
+        content_w  = min(cols - 1, MAX_MAP_W)
         view_w     = max(20, min(content_w, WIDTH))
 
-        # Horizontal centering: equal space each side of the content block
         map_pad = max(0, (cols - view_w) // 2)
         P = " " * map_pad
-
-        # Divider matches map width, with same left-padding as map rows
         DIV = P + f"{C_DIM}{'─'*view_w}{R_}"
-
-        clear()
+        out = []
 
         # ── TOP BAR ───────────────────────────────────────────────────────
         turn_str = T("world.turn", n=self.turn_count)
         if player:
-            stl_col = C_PURP if player.in_stealth else C_DIM
             imm = f" {C_GOLD}{B_}★{player.god_immunity_turns}{R_}" if getattr(player,"god_immunity_turns",0)>0 else ""
+            stl = f" {C_PURP}[hidden]{R_}" if player.in_stealth else ""
             party_lbl = f" {C_TEAL}[{','.join(m.name for m in player.party.members)}]{R_}" if player.party.members else ""
             if view_w >= 100:
-                # Full title bar for wide terminals
                 hp_w = max(8, min(16, view_w // 8))
                 mp_w = max(5, min(10, view_w // 12))
-                mode_lbl = "WASD" if player.movement_mode=="wasd" else "8DIR"
                 title_line = (
                     f"{C_CYAN}{B_}Terminal-RPG{R_}  {C_DIM}{turn_str}{R_}  "
                     f"{C_WHITE}{B_}{player.name}{R_} {C_DIM}Lv{R_}{C_GOLD}{B_}{player.level}{R_} "
                     f"{C_DIM}[{C_PURP}{player.job.name}{R_}{C_DIM}]{R_}  "
                     f"HP {hpbar(player.hp,player.max_hp,hp_w)}  "
                     f"MP {mpbar(player.mp,player.max_mp,mp_w)}  "
-                    f"{C_GOLD}G:{player.gold}{R_}{party_lbl}{imm}"
+                    f"{C_GOLD}G:{player.gold}{R_}{party_lbl}{imm}{stl}"
                 )
             else:
-                # Compact title bar for narrow terminals (≤80 cols)
-                hp_w = max(6, min(10, view_w // 10))
                 frac_hp = player.hp/player.max_hp if player.max_hp else 0
                 hp_col  = C_GREEN if frac_hp>.5 else C_YELL if frac_hp>.25 else C_RED
                 title_line = (
@@ -429,14 +461,14 @@ class WorldMap:
                     f"{C_GOLD}Lv{player.level}{R_} "
                     f"HP {hp_col}{player.hp}/{player.max_hp}{R_}  "
                     f"MP {C_BLUE}{player.mp}/{player.max_mp}{R_}  "
-                    f"{C_GOLD}G:{player.gold}{R_}{imm}"
+                    f"{C_GOLD}G:{player.gold}{R_}{imm}{stl}"
                 )
         else:
             title_line = f"{C_CYAN}{B_}Terminal-RPG{R_}  {C_DIM}{turn_str}{R_}"
 
-        print(DIV)
-        print(C(title_line))
-        print(DIV)
+        out.append(DIV)
+        out.append(C(title_line))
+        out.append(DIV)
 
         # ── MAP ───────────────────────────────────────────────────────────
         hw,hh = view_w//2, view_h//2
@@ -448,34 +480,34 @@ class WorldMap:
 
         for dy in range(view_h):
             y = sy+dy
-            row = P
+            row = [P]
             for dx in range(view_w):
                 x = sx+dx
                 if not (0<=x<WIDTH and 0<=y<HEIGHT):
-                    row += " "; continue
+                    row.append(" "); continue
                 if x==self.player_x and y==self.player_y:
-                    row += paint(PLAYER)
+                    row.append(paint(PLAYER))
                 elif not self.discovered[y][x]:
-                    row += f"{C_DIM} {R_}"
+                    row.append(" ")
                 else:
                     e = enemy_at.get((x,y))
-                    if e: row += e.display
-                    elif (x,y) in ship_at: row += paint("S")
-                    elif self._is_base_tile(x,y): row += paint("b")
-                    else: row += paint(self.terrain[y][x])
-            print(row)
+                    if e: row.append(e.display)
+                    elif (x,y) in ship_at: row.append(paint("S"))
+                    elif self._is_base_tile(x,y): row.append(paint("b"))
+                    else: row.append(paint(self.terrain[y][x]))
+            out.append("".join(row))
 
         # ── BOTTOM BAR ────────────────────────────────────────────────────
-        print(DIV)
+        out.append(DIV)
 
-        # Info line: continent · terrain · location/ship · nearby · story
         ter  = self.terrain[self.player_y][self.player_x]
         cid  = self.cont_map[self.player_y][self.player_x]
         cont = next((c for c in CONTINENTS if c["id"]==cid), None)
         tname= {OCEAN:"Ocean",SHALLOWS:"Shallows",PLAINS:"Plains",
                 FOREST:"Forest",MOUNTAIN:"Mountains",SNOW:"Snow",
                 HILL:"Hills",ROAD:"Road",RIVER:"River",SAND:"Sand",
-                MINE_T:"Mine",DRAGON_T:"Dragon Cave"}.get(ter,"?")
+                MINE_T:"Mine",DRAGON_T:"Dragon Cave","P":"City","H":"Port",
+                "X":"Dungeon"}.get(ter,"?")
         cont_col  = cont["col"] if cont else C_WHITE
         cont_name = cont["name"] if cont else "Open Sea"
         loc  = self._loc_at(self.player_x, self.player_y)
@@ -483,7 +515,6 @@ class WorldMap:
         loc_str = ""
         if loc:   loc_str = f"  {C_GOLD}{B_}▶ {loc['name']} [E]{R_}"
         elif ship: loc_str = f"  {fg(255,255,180)}⚓ Ship [E]{R_}"
-        # Nearby enemies
         nearby_parts = []
         for e in self.map_enemies:
             dist = math.sqrt((e.x-self.player_x)**2+(e.y-self.player_y)**2)
@@ -491,7 +522,6 @@ class WorldMap:
                 c=fg(255,80,80) if e.chasing else fg(220,160,60)
                 nearby_parts.append(f"{c}{'⚔' if e.chasing else '●'}{e.name}{R_}")
         nearby_str = f"  {C_RED}⚠ {','.join(nearby_parts)}{R_}" if nearby_parts else ""
-        # Story hint
         story_str = ""
         if player and player.stories.get_main_step():
             step  = player.stories.get_main_step()
@@ -500,36 +530,33 @@ class WorldMap:
             prog  = player.stories.main_progress
             req   = step["required"]
             story_str = f"  {col}★{step['title']}{R_} {C_DIM}[{prog}/{req}]{R_}"
-        info_line = (f"{cont_col}{cont_name}{R_}  {C_DIM}{tname}{R_}"
-                     f"{loc_str}{nearby_str}{story_str}")
-        print(C(info_line))
+        out.append(C(f"{cont_col}{cont_name}{R_}  {C_DIM}{tname}{R_}"
+                     f"{loc_str}{nearby_str}{story_str}"))
 
-        # Controls line — compact on narrow terminals, full on wide
         mhint = f"{C_GOLD}WASD{R_}" if (not player or player.movement_mode=="wasd") else f"{C_GOLD}Numpad{R_}"
         if view_w >= 110:
-            print(C(f"{mhint}{C_DIM}=move  {R_}"
+            out.append(C(f"{mhint}{C_DIM}=move  {R_}"
                     f"{C_GOLD}[E]{R_}{C_DIM}Enter  {R_}"
                     f"{C_GOLD}[I]{R_}{C_DIM}Bag  {R_}"
                     f"{C_GOLD}[F]{R_}{C_DIM}Fast  {R_}"
                     f"{C_GOLD}[O]{R_}{C_DIM}Overview  {R_}"
                     f"{C_GOLD}[J]{R_}{C_DIM}Journal  {R_}"
+                    f"{C_GOLD}[N]{R_}{C_DIM}Party  {R_}"
                     f"{C_GOLD}[C]{R_}{C_DIM}Codex  {R_}"
                     f"{C_GOLD}[B]{R_}{C_DIM}Base  {R_}"
                     f"{C_GOLD}[P]{R_}{C_DIM}Save  {R_}"
                     f"{C_GOLD}[?]{R_}{C_DIM}Help  {R_}"
                     f"{C_GOLD}[Q]{R_}{C_DIM}Quit{R_}"))
         else:
-            print(C(f"{mhint}{C_DIM}=move  {R_}"
+            out.append(C(f"{mhint}{C_DIM}=move  {R_}"
                     f"{C_GOLD}[E]{R_}{C_DIM}Enter  {R_}"
-                    f"{C_GOLD}[I]{R_}{C_DIM}Inv  {R_}"
-                    f"{C_GOLD}[F]{R_}{C_DIM}Fast  {R_}"
+                    f"{C_GOLD}[I]{R_}{C_DIM}Bag  {R_}"
+                    f"{C_GOLD}[J]{R_}{C_DIM}Journal  {R_}"
                     f"{C_GOLD}[P]{R_}{C_DIM}Save  {R_}"
+                    f"{C_GOLD}[?]{R_}{C_DIM}Help  {R_}"
                     f"{C_GOLD}[Q]{R_}{C_DIM}Quit{R_}"))
 
-        # Message / prompt line — always on the last row
-        # Show message + blinking cursor so player sees where input goes
-        print(C(f"{self.last_msg}  {C_GOLD}{B_}›{R_}"), end='', flush=True)
-
+        draw_frame(out, C(f"{self.last_msg}  {C_GOLD}{B_}›{R_}"))
 
     def move_player(self,dx,dy,player):
         nx,ny=self.player_x+dx,self.player_y+dy
@@ -584,10 +611,15 @@ class WorldMap:
                     s=SIDE_STORIES[sid]
                     self.last_msg+=f"  {s['colour']}[New side story: {s['title']}!]{R_}"
 
+        if self.turn_count % 25 == 0:
+            self._respawn_enemies()
+
         for e in self.map_enemies[:]:
             if e.step(nx,ny,player.get_stealth(),self.terrain,WIDTH,HEIGHT):
                 self._enemy_contact(e,player); return
 
+        if loc or ship:
+            return   # no ambushes on the doorstep of a town / dungeon
         enc=ENC_RATE.get(ter,0.0)
         # Interesting world events fire more often than combat
         if random.random() < 0.04:   # 4% chance per step of a discovery
@@ -604,23 +636,29 @@ class WorldMap:
         # God potion immunity
         if getattr(player,"god_immunity_turns",0) > 0:
             self.last_msg=f"{C_PURP}★ Enemies sense your divine protection and back away.{R_}"
-            map_enemy.chasing=False; map_enemy.alert_cooldown=0; return
+            map_enemy.calm(); return
         if player.try_stealth_evade():
-            self.last_msg=(f"{C_PURP}You slip past the {map_enemy.name} undetected!{R_}"); 
-            map_enemy.chasing=False; map_enemy.alert_cooldown=0; return
+            self.last_msg=(f"{C_PURP}You slip past the {map_enemy.name} undetected! "
+                           f"{C_DIM}(hidden — your next attack is a sneak attack){R_}")
+            map_enemy.calm(); return
         from game_enemies import generate_enemy
         from game_systems import run_combat
-        enemy=generate_enemy(map_enemy.zone,map_enemy.danger,player.level)
-        enemy.name=map_enemy.name; first_strike=player.in_stealth
+        enemy=generate_enemy(map_enemy.zone,map_enemy.danger,player.level,name=map_enemy.name)
+        first_strike=player.in_stealth
         self.last_msg=f"{C_RED}!! {map_enemy.name} attacks!{R_}"
         self.render(player)
         import time; time.sleep(0.3)
         outcome=run_combat(player,enemy,first_strike=first_strike)
-        if outcome=="defeat": self._handle_defeat(player)
+        if outcome=="defeat":
+            map_enemy.calm()
+            self._handle_defeat(player)
+        elif outcome=="escaped":
+            map_enemy.calm()
+            self.last_msg=f"{C_DIM}You got away from the {map_enemy.name}.{R_}"
         else:
-            self.map_enemies.remove(map_enemy)
-            completed=player.stories.on_kill(map_enemy.name,player)
-            self._handle_story_completions(completed)
+            if map_enemy in self.map_enemies:
+                self.map_enemies.remove(map_enemy)
+            self.last_msg=f"{C_GREEN}Defeated the {map_enemy.name}!{R_}"
 
     def _random_encounter(self,player,terrain,cid):
         # God potion immunity — skip all encounters
@@ -629,18 +667,28 @@ class WorldMap:
         from game_enemies import generate_enemy; from game_systems import run_combat
         cont=next((c for c in CONTINENTS if c["id"]==cid),None)
         zone=BIOME_ZONE.get(cont["biome"] if cont else "forest","plains")
-        danger=DANGER_LVL.get(terrain,1)
+        danger=DANGER_LVL.get(terrain,1) + (CONTINENT_DANGER.get(cid,1) - 1)
         enemy=generate_enemy(zone,danger,player.level)
         if player.try_stealth_evade():
-            self.last_msg=f"{C_PURP}A {enemy.name} lurks nearby... you slip past.{R_}"; return
+            self.last_msg=f"{C_PURP}A {enemy.name} lurks nearby... you slip past unseen.{R_}"; return
         first_strike=player.in_stealth
         self.last_msg=f"{C_RED}!! A {enemy.name} appears!{R_}"
         self.render(player); import time; time.sleep(0.3)
         outcome=run_combat(player,enemy,first_strike=first_strike)
         if outcome=="defeat": self._handle_defeat(player)
-        else:
-            completed=player.stories.on_kill(enemy.name,player)
-            self._handle_story_completions(completed)
+        elif outcome=="escaped": self.last_msg=f"{C_DIM}You escaped the {enemy.name}.{R_}"
+        else: self.last_msg=f"{C_GREEN}Defeated the {enemy.name}!{R_}"
+
+    def _respawn_enemies(self):
+        """Keep the world alive: top up roaming monsters far from the player."""
+        if len(self.map_enemies) >= MIN_MAP_ENEMIES:
+            return
+        from game_map_enemies import spawn_world_enemies
+        fresh = spawn_world_enemies(self.locations, self.terrain, WIDTH, HEIGHT,
+                                    count=6, cont_map=self.cont_map)
+        for e in fresh:
+            if abs(e.x - self.player_x) + abs(e.y - self.player_y) > 25:
+                self.map_enemies.append(e)
 
     def _world_event(self,player,terrain,cid):
         """Random positive/interesting discovery while exploring."""
@@ -664,7 +712,6 @@ class WorldMap:
         if etype=="nothing":
             return  # no message, stay silent
 
-        clear()
         if etype=="hidden_chest":
             gold=random.randint(20,80)
             player.gold+=gold
@@ -715,27 +762,37 @@ class WorldMap:
         print(C(f"\n{C_RED}{B_}You were defeated...{R_}\n"))
         if player.gold>0:
             lost=min(player.gold,max(5,player.gold//10))
-            player.gold-=lost; print(f"  {C_RED}Lost {lost} gold.{R_}")
+            player.gold-=lost; print(C(f"{C_RED}Lost {lost} gold.{R_}"))
         player.hp=max(1,player.max_hp//3); player.mp=max(0,player.max_mp//3)
+        player.status_effects.clear()
+        player.god_immunity_turns=max(getattr(player,"god_immunity_turns",0),8)
+        # Wake up in the nearest city on the SAME continent (it used to always
+        # be the first city generated — possibly across the ocean)
+        here=self.cont_map[self.player_y][self.player_x]
         cities=[l for l in self.locations if l["type"]=="city"]
-        if cities:
-            c=cities[0]; self.player_x,self.player_y=c["x"],c["y"]
-            print(C(f"{C_DIM}You wake up in {C_GOLD}{c['name']}{R_}{C_DIM}...{R_}"))
+        same=[l for l in cities if l.get("continent")==here] or cities
+        if same:
+            c=min(same,key=lambda l:abs(l["x"]-self.player_x)+abs(l["y"]-self.player_y))
+            self.player_x,self.player_y=c["x"],c["y"]
+            self._reveal(radius=6)
+            print(C(f"{C_DIM}You wake up in {C_GOLD}{c['name']}{R_}{C_DIM}, bandaged and sore...{R_}"))
         input(C(f"\n{C_DIM}(Press Enter){R_}"))
-        self.last_msg=f"{C_DIM}You recover after defeat.{R_}"
+        self.last_msg=f"{C_DIM}You recover after defeat. Monsters keep their distance for a few steps.{R_}"
+
+    def _after_adventure(self,player):
+        """Common cleanup after any sub-location that can kill the player."""
+        if not player.is_alive():
+            self._handle_defeat(player)
+            return True
+        return False
 
     # ── ENTER LOCATION ───────────────────────────────────────────
 
-    def enter_location(self,player):
+    def enter_location(self,player,autosave=None):
         ship=next((s for s in self.ships if s["x"]==self.player_x and s["y"]==self.player_y),None)
         if ship: self._board_ship(player,ship); return
         loc=self._loc_at(self.player_x,self.player_y)
         if not loc:
-            # nearby ship from port
-            for s in self.ships:
-                pl=next((l for l in self.locations if l["name"]==s["port_name"]),None)
-                if pl and pl["x"]==self.player_x and pl["y"]==self.player_y:
-                    self._board_ship(player,s); return
             self.last_msg=f"{C_DIM}Nothing to enter here.{R_}"; return
 
         if loc["type"] in ("city","port"):
@@ -760,13 +817,10 @@ class WorldMap:
                 if ch=="0": return
                 if ch=="2" and ship:
                     self._board_ship(player,ship); return
-                # ch=="1" or anything else → fall through to town
 
             # story triggers
             completed=player.stories.on_visit(loc["name"],player)
             self._handle_story_completions(completed)
-            completed2=player.stories.on_talk("dragon_rumour",player)
-            self._handle_story_completions(completed2)
             unlocked=player.stories.on_town_visit(loc["name"],player)
             if unlocked:
                 from game_stories import SIDE_STORIES
@@ -778,47 +832,59 @@ class WorldMap:
             town=Town(player,loc["name"],rname)
             town.set_companion_callback(lambda: town_recruitment_menu(player,loc["name"]))
             town.set_base_info(loc.get("continent",""), loc["x"], loc["y"])
-            # Also add ship-board option inside town for ports
+            town.set_world(self, autosave)
             if loc["type"]=="port":
                 _ship_ref=next((s for s in self.ships if s["port_name"]==loc["name"]),None)
                 if _ship_ref:
                     town.set_ship(self,_ship_ref,player)
             town.enter()
-            self.last_msg=f"{C_GOLD}Left {loc['name']}.{R_}"
+            if self._loc_at(self.player_x,self.player_y) is loc:
+                self.last_msg=f"{C_GOLD}Left {loc['name']}.{R_}"
 
         elif loc["type"]=="dungeon":
-            from game_systems import Dungeon
-            has_boss=not player.flags.get(f"dungeon_cleared_{loc['name']}",False)
-            danger=DANGER_LVL.get(self.terrain[self.player_y][self.player_x],2)
-            d=Dungeon(loc["name"],danger=danger+1,player_level=player.level,has_boss=has_boss)
+            from game_dungeon import DungeonManager
+            name=loc["name"]
+            cleared=player.flags.get(f"dungeon_cleared_{name}",False)
+            boss=None if cleared else DUNGEON_BOSSES.get(name,"Goblin King")
+            danger=CONTINENT_DANGER.get(loc.get("continent",""),2)
+            d=DungeonManager(name,danger=danger,boss_name=boss)
             result=d.enter(player)
-            if result in ("cleared","escaped"):
-                completed=player.stories.on_dungeon_clear(loc["name"],player)
+            if result=="cleared":
+                player.flags[f"dungeon_cleared_{name}"]=True
+                completed=player.stories.on_dungeon_clear(name,player)
                 self._handle_story_completions(completed)
-            self.last_msg=f"{C_DIM}Left {loc['name']}.{R_}"
+                self.last_msg=f"{C_GOLD}★ {name} conquered!{R_}"
+            elif not self._after_adventure(player):
+                self.last_msg=f"{C_DIM}Left {name}.{R_}"
 
         elif loc["type"]=="mine":
             from game_mining import Mine
+            # Entering any mine reveals the "Haunted Mine" side story
+            if "haunted_mine" not in player.stories.side_stories:
+                from game_stories import SIDE_STORIES
+                player.stories.unlock_side("haunted_mine")
+                s=SIDE_STORIES["haunted_mine"]; clear()
+                print(C(f"\n{s['colour']}{B_}NEW SIDE STORY UNLOCKED: {s['title']}{R_}"))
+                print(C(f"\n{C_DIM}{s['intro']}{R_}"))
+                input(C(f"\n{C_DIM}(Press Enter){R_}"))
             m=Mine(loc["name"],loc["continent"],loc.get("biome","mountain"))
             gold=m.enter(player)
-            completed=player.stories.on_visit("mine_cleared",player)
-            self._handle_story_completions(completed)
-            # haunted mine side story
-            completed2=player.stories.on_kill("Skeleton",player)
-            self.last_msg=f"{C_ORAN}Left mine: {loc['name']}. Earned {gold}g.{R_}"
+            if not self._after_adventure(player):
+                self.last_msg=f"{C_ORAN}Left mine: {loc['name']}. Earned {gold}g.{R_}"
 
         elif loc["type"]=="dragon_cave":
             self._enter_dragon_cave(player,loc)
+            self._after_adventure(player)
 
         elif loc["type"]=="ruins":
             self._explore_ruins(player,loc)
+            self._after_adventure(player)
 
     def _enter_dragon_cave(self,player,loc):
         if not self.dragon_alive:
             clear(); print(C(f"\n{C_DIM}The cave is silent. Vaeltharion is dead.{R_}"))
             input(C(f"{C_DIM}(Press Enter){R_}")); return
-        from game_systems import Dungeon
-        from game_enemies import create_boss
+        from game_dungeon import DungeonManager
         clear()
         print(C(f"\n{C_RED}{B_}╔══════════════════════════════════════════╗"))
         print(C(f"║  ★  VAELTHARION'S LAIR                   ║"))
@@ -826,32 +892,42 @@ class WorldMap:
         print(C(f"{C_DIM}The stench of sulphur fills the air. The walls are scorched."))
         print(C(f"Claw marks the size of a man scar the stone."))
         print(C(f"Deep within, something breathes...{R_}\n"))
+        print(C(f"{C_DIM}Four floors deep. A guardian blocks the final stairway, and the"))
+        print(C(f"dragon itself waits at the bottom. Come prepared.{R_}\n"))
         print(C(f"{C_GOLD}[E]{R_}{C_DIM} Enter the cave{R_}"))
         print(C(f"{C_GOLD}[0]{R_}{C_DIM} Turn back{R_}"))
         ch=input(C(f"\n{C_GOLD}>{R_} ")).strip()
-        if ch!="e" and ch!="E": return
-        d=Dungeon("Vaeltharion's Lair",width=35,height=16,danger=5,
-                  player_level=player.level,has_boss=True,boss_override="Dragon")
+        if ch.lower()!="e": return
+        d=DungeonManager("Vaeltharion's Lair",danger=5,boss_name="Dragon",floors=4)
         result=d.enter(player)
-        if result in ("cleared",):
+        if result=="cleared":
             self.dragon_alive=False
             player.flags["dragon_slain"]=True
             completed=player.stories.on_dungeon_clear("Vaeltharion",player)
-            completed+=player.stories.on_kill("Dragon",player)
             self._handle_story_completions(completed)
             self.last_msg=f"{C_GOLD}{B_}★ VAELTHARION IS SLAIN! The world is saved! ★{R_}"
+        elif player.is_alive():
+            self.last_msg=f"{C_DIM}You retreat from the dragon's lair.{R_}"
 
     def _explore_ruins(self,player,loc):
         clear(); print(C(f"\n{C_PURP}{B_}══ RUINS: {loc['name']} ══{R_}\n"))
+        key=f"ruins_explored_{loc['name']}"
+        if player.flags.get(key):
+            print(C(f"{C_DIM}You have already picked these ruins clean. Only dust remains.{R_}"))
+            input(C(f"\n{C_DIM}(Press Enter){R_}"))
+            self.last_msg=f"{C_DIM}{loc['name']} — already explored.{R_}"
+            return
+        player.flags[key]=True
         from game_party import try_world_companion_event
         events=[
             (f"{C_GOLD}You find a hidden chest!{R_}","chest"),
             (f"{C_RED}Monsters lurk in the shadows!{R_}","fight"),
             (f"{C_CYAN}An ancient inscription — you feel stronger.{R_}","stat"),
-            (f"{C_DIM}Only dust and broken stone.{R_}","empty"),
             (f"{C_YELL}A mysterious stranger sits by a fire...{R_}","companion"),
         ]
-        desc,etype=random.choice(events); print(f"  {desc}\n")
+        desc,etype=random.choice(events); print(C(desc)); print()
+        if etype=="companion" and not player.party.members:
+            etype="chest"
         if etype=="chest":
             gold=random.randint(40,160); player.gold+=gold
             from game_items import ITEM_POOL
@@ -859,8 +935,13 @@ class WorldMap:
             print(C(f"{C_GOLD}Found {gold} gold{R_} and {C_WHITE}{loot}{R_}!"))
         elif etype=="fight":
             from game_enemies import generate_enemy; from game_systems import run_combat
-            e=generate_enemy("dungeon",2,player.level)
-            input(C(f"{C_DIM}(Enter){R_}")); run_combat(player,e)
+            e=generate_enemy("dungeon",CONTINENT_DANGER.get(loc.get("continent",""),2),player.level)
+            input(C(f"{C_DIM}(Press Enter to fight){R_}"))
+            if run_combat(player,e)=="defeat":
+                return
+            clear()
+            gold=random.randint(30,90); player.gold+=gold
+            print(C(f"{C_GOLD}Behind the {e.name} you find a stash: +{gold} gold.{R_}"))
         elif etype=="stat":
             player.max_hp+=5; player.hp=min(player.hp+5,player.max_hp)
             print(C(f"{C_GREEN}Max HP +5!{R_}"))
@@ -886,15 +967,15 @@ class WorldMap:
             aff=C_WHITE if player.gold>=cost else C_DIM
             print(C(f"{C_GOLD}{B_}[{i}]{R_} {aff}{port['name']:<22}{R_}  {ccol}{cname:<16}{R_}  {C_GOLD}{cost}g{R_}  {C_DIM}({dist:.0f}L){R_}"))
         print(C(f"\n{C_GOLD}[0]{R_}{C_DIM} Stay  Gold: {C_GOLD}{player.gold}{R_}\n"))
-        print(f"  Choose: ",end="",flush=True); ch=input().strip()
-        if ch=="0" or not ch.isdigit(): return
+        ch=input(C(f"{C_GOLD}>{R_} Choose destination: ")).strip()
+        if ch=="0" or not ch.isdigit(): return False
         idx=int(ch)-1
-        if not(0<=idx<len(other)): return
+        if not(0<=idx<len(other)): return False
         dest=other[idx]
         dist=math.sqrt((ship["port_x"]-dest["x"])**2+(ship["port_y"]-dest["y"])**2)
         cost=max(10,int(dist*0.5))
         if player.gold<cost:
-            print(C(f"\n{C_RED}Need {cost}g.{R_}")); input(C(f"{C_DIM}(Enter){R_}")); return
+            print(C(f"\n{C_RED}Need {cost}g.{R_}")); input(C(f"{C_DIM}(Enter){R_}")); return False
         player.gold-=cost; clear()
         print(C(f"\n{fg(255,255,180)}{B_}Setting sail for {dest['name']}...{R_}\n"))
         voyage=["  The anchor is raised. Sails fill with wind.",
@@ -902,19 +983,25 @@ class WorldMap:
                 "  Stars guide your path through the night.",
                 "  A pod of dolphins races alongside the hull.",
                 "  The open ocean stretches endlessly around you."]
-        for l in random.sample(voyage,3): print(f"  {C_DIM}{l}{R_}")
+        for l in random.sample(voyage,3): print(C(f"{C_DIM}{l.strip()}{R_}"))
         if dist>40 and random.random()<0.2:
             dmg=random.randint(15,40); player.hp=max(1,player.hp-dmg)
             lost=random.randint(10,30); player.gold=max(0,player.gold-lost)
             print(C(f"\n{C_RED}!! STORM! {dmg} damage, {lost} gold lost!{R_}"))
         else: print(C(f"\n{C_GREEN}Fair winds!{R_}"))
-        self.player_x=dest["x"]; self.player_y=max(0,dest["y"]-1); self._reveal(radius=8)
+        # Land ON the port tile (the tile above it was often open water)
+        self.player_x=dest["x"]; self.player_y=dest["y"]; self._reveal(radius=8)
         cont=next((c for c in CONTINENTS if c["id"]==dest.get("continent","")),None)
         print(C(f"\n{C_GOLD}Arrived at {dest['name']}, {cont['name'] if cont else '?'}.{R_}"))
         input(C(f"\n{C_DIM}(Press Enter){R_}"))
         self.last_msg=f"{C_GOLD}{T('ship.arrived', dest=dest['name'])}{R_}"
         completed=player.stories.on_visit(dest["name"],player)
         self._handle_story_completions(completed)
+        sid=player.stories.on_port_visit(dest["name"],player)
+        if sid:
+            from game_stories import SIDE_STORIES
+            self.last_msg+=f"  {SIDE_STORIES[sid]['colour']}[New side story: {SIDE_STORIES[sid]['title']}!]{R_}"
+        return True
 
     # ── FAST TRAVEL, OVERVIEW, LOCATIONS, HELP ───────────────────
 
@@ -1015,6 +1102,7 @@ class WorldMap:
             f"{C_GOLD}[J]{R_}  Story journal",
             f"{C_GOLD}[C]{R_}  Encyclopedia — enemies, shops, crafting guide",
             f"{C_GOLD}[B]{R_}  Build base / enter existing base",
+            f"{C_GOLD}[N]{R_}  Party & clan management",
             f"{C_GOLD}[M]{R_}  Discovered locations list",
             f"{C_GOLD}[P]{R_}  Save game",
             f"{C_GOLD}[?]{R_}  This help screen",
@@ -1066,11 +1154,11 @@ class WorldMap:
                 "map_enemies":[e.to_dict() for e in self.map_enemies]}
 
     def save(self,filename=SAVE_FILE):
-        with open(filename,"w") as f: json.dump(self.to_dict(),f)
+        with open(filename,"w",encoding="utf-8") as f: json.dump(self.to_dict(),f)
 
     @classmethod
     def load(cls,filename=SAVE_FILE):
-        with open(filename,"r") as f: d=json.load(f)
+        with open(filename,"r",encoding="utf-8") as f: d=json.load(f)
         w=cls(seed=d["seed"])
         w.player_x=d["player_x"]; w.player_y=d["player_y"]
         w.discovered=d["discovered"]; w.turn_count=d["turn_count"]

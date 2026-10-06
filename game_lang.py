@@ -9,6 +9,8 @@ Usage:
     T("menu.inn", cost=20)          → "Rest & heal  (20 gold)"
 """
 
+from __future__ import annotations
+
 import os
 
 _R="\033[0m"; _B="\033[1m"
@@ -197,7 +199,8 @@ STRINGS = _S
 def pick_language_screen():
     """Full-screen language selector. Returns chosen language code."""
     import shutil
-    os.system("cls" if os.name=="nt" else "clear")
+    from game_term import clr
+    clr()
     # Use C() from game_term for proper centring
     try:
         from game_term import C as _C
@@ -244,18 +247,20 @@ def pick_language_screen():
     return LANG
 
 
-def save_language_pref(filename="lang.cfg"):
+_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang.cfg")
+
+def save_language_pref(filename=_CFG_PATH):
     """Persist language choice across sessions."""
     try:
-        with open(filename,"w") as f: f.write(LANG)
+        with open(filename,"w",encoding="utf-8") as f: f.write(LANG)
     except Exception:
         pass
 
 
-def load_language_pref(filename="lang.cfg"):
+def load_language_pref(filename=_CFG_PATH):
     """Load saved language on startup."""
     try:
-        with open(filename) as f:
+        with open(filename,encoding="utf-8") as f:
             code = f.read().strip()
             if code in LANGUAGE_NAMES:
                 set_language(code)

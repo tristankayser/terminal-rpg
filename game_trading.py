@@ -15,7 +15,7 @@ _GOLD =_fg(255,215,0);  _WHITE=_fg(255,255,255); _DIM  =_fg(100,100,100)
 _GREEN=_fg(80,200,80);  _RED  =_fg(220,60,60);   _CYAN =_fg(80,220,220)
 _YELL =_fg(240,200,60); _PURP =_fg(180,80,220);  _ORAN =_fg(220,140,40)
 
-def _clear(): os.system("cls" if os.name == "nt" else "clear")
+def _clear(): clr()
 def _opt(k,l,h=""): return f"    {_GOLD}{_B}[{k}]{_R} {_WHITE}{l}{_R}" + (f"  {_DIM}{h}{_R}" if h else "")
 
 # ── Trade offer templates ─────────────────────────────────────────
@@ -71,7 +71,10 @@ class Trader:
     ]
 
     def __init__(self, town_name, seed=None):
-        rng = random.Random(seed or hash(town_name) % 99999)
+        # Stable seed (str hash() is randomised per run, so the trader's
+        # stock used to change every time you restarted the game)
+        import zlib
+        rng = random.Random(seed or zlib.crc32(town_name.encode("utf-8")))
         self.name   = rng.choice(self.TRADER_NAMES)
         self.town   = town_name
         # Pick 3–5 offers: at least 2 common, 1–2 uncommon, 0–1 rare
@@ -86,12 +89,20 @@ class Trader:
         self.offers = offers[:5]
 
     def open(self, player):
+        from game_items import entry_qty, remove_items
+        # Trades already completed in this town stay completed
+        done = player.flags.setdefault("trades_done", {}).setdefault(self.town, [])
+        self.offers = [o for o in self.offers if f"{o[0]}>{o[2]}" not in done]
+        if not self.offers:
+            _clear()
+            print(C(f"\n{_DIM}{self.name} has nothing left to trade with you.{_R}"))
+            input(C(f"{_DIM}(Enter){_R}")); return
         while True:
             _clear()
-            # Count player materials
+            # Count player items (stack-aware)
             have = {}
             for it in player.inventory:
-                have[it.name] = have.get(it.name, 0) + 1
+                have[it.name] = have.get(it.name, 0) + entry_qty(it)
 
             print(C(f"\n{_YELL}{_B}╔══════════════════════════════════════════════╗"))
             print(C(f"║  🧳  TRADER: {self.name:<32}║"))
@@ -104,10 +115,10 @@ class Trader:
                 mark  = f"{_GREEN}[✓]{_R}" if can else f"{_DIM}[✗]{_R}"
                 r_col = _DIM if rarity=="common" else _ORAN if rarity=="uncommon" else _PURP
                 have_str = f"{_DIM}(have {have.get(give_n,0)}){_R}"
-                print(f"  {_GOLD}{_B}[{i}]{_R} {mark}  "
-                      f"{_RED}Give:{_R} {_WHITE}{give_n} ×{give_q}{_R} {have_str}  "
-                      f"{_GREEN}Get:{_R} {_WHITE}{recv_n} ×{recv_q}{_R}  "
-                      f"{r_col}[{rarity}]{_R}")
+                print(C(f"{_GOLD}{_B}[{i}]{_R} {mark}  "
+                        f"{_RED}Give:{_R} {_WHITE}{give_n} ×{give_q}{_R} {have_str}  "
+                        f"{_GREEN}Get:{_R} {_WHITE}{recv_n} ×{recv_q}{_R}  "
+                        f"{r_col}[{rarity}]{_R}"))
                 if can:
                     tradeable.append((i-1, give_n, give_q, recv_n, recv_q))
 
@@ -115,8 +126,8 @@ class Trader:
             if not tradeable:
                 print(C(f"\n{_DIM}You don't have enough of the required items for any trade.{_R}"))
 
-            ch = input(f"\n  {_GOLD}>{_R} ").strip()
-            if ch == "0": return
+            ch = input(C(f"\n{_GOLD}>{_R} ")).strip()
+            if ch in ("0", ""): return
             if not ch.isdigit(): continue
             idx = int(ch)-1
             if not (0 <= idx < len(self.offers)): continue
@@ -126,14 +137,8 @@ class Trader:
                 print(C(f"\n{_RED}You need {give_q}x {give_n} for this trade.{_R}"))
                 input(C(f"{_DIM}(Enter){_R}")); continue
 
-            # Execute trade — remove given items
-            removed = 0; new_inv = []
-            for it in player.inventory:
-                if it.name == give_n and removed < give_q:
-                    removed += 1
-                else:
-                    new_inv.append(it)
-            player.inventory = new_inv
+            # Execute trade — remove given items (stack-aware)
+            remove_items(player.inventory, give_n, give_q)
 
             # Add received items
             received = _make_item(recv_n, recv_q)
@@ -144,7 +149,8 @@ class Trader:
             print(C(f"Gave: {_RED}{give_n} ×{give_q}{_R}  →  Got: {_GREEN}{recv_n} ×{recv_q}{_R}"))
             input(C(f"{_DIM}(Press Enter){_R}"))
 
-            # Remove this offer (one-time trade)
+            # Remove this offer (one-time trade, remembered in the save)
+            done.append(f"{give_n}>{recv_n}")
             self.offers.pop(idx)
             if not self.offers:
                 print(C(f"\n{_DIM}{self.name} has nothing left to trade.{_R}"))

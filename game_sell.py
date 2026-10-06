@@ -40,7 +40,8 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
         print(C(f"\n{_GOLD}{_B}╔══════════════════════════════════════════╗"))
         print(C(f"║   💰  SELL ITEMS                          ║"))
         print(C(f"╚══════════════════════════════════════════╝{_R}"))
-        print(C(f"  {_DIM}Gold: {_GOLD}{player.gold}g{_R}   Bag: {total_items}/{30} slots\n"))
+        print(C(f"  {_DIM}Gold: {_GOLD}{player.gold}g{_R}   Bag: {total_items}/{30} slots   "
+                f"{_DIM}(equipped gear is never sold){_R}\n"))
 
         # Quick sell options
         mat_val  = _preview_sell_materials(inv, shop_sell_multiplier)
@@ -90,7 +91,7 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
             return
 
         elif ch == "m":
-            earned = sell_all_materials(inv, player)
+            earned = sell_all_materials(inv, player, shop_sell_multiplier)
             if earned:
                 print(C(f"{_GREEN}Sold all materials for {_GOLD}+{earned}g{_R}!"))
             else:
@@ -98,7 +99,7 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
             input(C(f"{_DIM}Enter...{_R}"))
 
         elif ch == "p":
-            earned = sell_all_consumables(inv, player)
+            earned = sell_all_consumables(inv, player, shop_sell_multiplier)
             if earned:
                 print(C(f"{_GREEN}Sold all consumables for {_GOLD}+{earned}g{_R}!"))
             else:
@@ -145,6 +146,10 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
                 else:
                     # Sell single item
                     item_obj = entry.item if isinstance(entry, ItemStack) else entry
+                    if item_obj.item_type == "god":
+                        ok = input(C(f"  {_YELL}Sell your God Potion? It revives you at 0 HP. (y/n) {_R}")).strip().lower()
+                        if ok != "y":
+                            continue
                     sv = int(item_obj.sell_value * shop_sell_multiplier)
                     inv.pop(real_idx)
                     player.gold += sv

@@ -7,6 +7,8 @@ Each job class has 4 distinct style options. Each gives a cosmetic look
 Previous perk is removed when you switch.
 """
 
+from __future__ import annotations
+
 import os
 from game_term import C, clr, W
 
@@ -663,121 +665,112 @@ def _sw(rgb):
     return f"\033[38;2;{r};{g};{b}m██{_R}"
 
 
-# ── Main screen ───────────────────────────────────────────────────
+def _wrap(text, width):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 > width:
+            lines.append(cur); cur = w
+        else:
+            cur = (cur + " " + w).strip()
+    if cur: lines.append(cur)
+    return lines
+
 
 def open_customise(player):
+    """Style browser: big live preview of your hero in each style."""
+    from game_art import render_sprite, sprite_width
     job_name = player.job.name
-    styles   = get_styles(job_name)
-    current  = getattr(player,"_custom_style_id",None)
+    styles   = list(get_styles(job_name))
+    lskin    = get_legendary_skin(job_name)
+    lquest   = get_legendary_quest(job_name)
+    options  = styles + ([lskin] if lskin else [])
+    current  = getattr(player, "_custom_style_id", None)
+    sel      = next((i for i, s in enumerate(options) if s["id"] == current), 0)
+    msg      = ""
 
     while True:
-        clr()
-        print(C(f"\n{_GOLD}{_B}╔══════════════════════════════════════════════════╗"))
-        print(C(f"║  🎨  CHARACTER CUSTOMISATION                     ║"))
-        print(C(f"╚══════════════════════════════════════════════════╝{_R}"))
-        print(C(f"\n  {_WHITE}{_B}{player.name}{_R}  —  {_CYAN}{job_name}{_R}"))
-        if current:
-            lbl = getattr(player,"_custom_style_label",current)
-            print(C(f"  {_DIM}Active style: {_GOLD}{lbl}{_R}"))
-        print()
-        print(C(f"  {_DIM}Choose your look. Switching removes the old perk and applies the new one."))
-        print(C(f"  Free to change any time in any town.{_R}\n"))
-        print(C(f"  {_DIM}{'─'*52}{_R}"))
-
-        for i, s in enumerate(styles, 1):
-            tick  = f"  {_GREEN}✓{_R}" if s["id"]==current else "   "
-            num   = f"{_GOLD}{_B}[{i}]{_R}"
-            swtch = _sw(s["colour"])
-            lbl   = f"{_WHITE}{_B}{s['label']}{_R}"
-            spr   = f"  {s['sprite']}" if s.get("sprite") else ""
-            print(C(f"{tick} {num}  {swtch}  {lbl}{spr}"))
-            print(C(f"        {_DIM}{s['desc']}{_R}"))
-            print(C(f"        {_YELL}Perk:{_R} {_GREEN}{s['perk']}{_R}"))
-            print()
-
-        # ── Legendary skin row ──────────────────────────────
-        lskin   = get_legendary_skin(job_name)
-        lquest  = get_legendary_quest(job_name)
-        unlocked = is_legendary_unlocked(player)
+        unlocked  = is_legendary_unlocked(player)
         active_lq = legendary_quest_active(player)
+        s         = options[sel]
+        is_leg    = s["id"].startswith("lskin_")
+        locked    = is_leg and not unlocked
 
-        print(C(f"  {_DIM}{'─'*52}{_R}"))
-        print(C(f"  {_GOLD}{_B}★  LEGENDARY SKIN{_R}"))
-        if unlocked and lskin:
-            tick = f"  {_GREEN}✓{_R}" if lskin["id"] == current else "   "
-            print(C(f"{tick} {_GOLD}{_B}[L]{_R}  {_sw(lskin['colour'])}  {_GOLD}{_B}{lskin['label']}{_R}  {lskin.get('sprite','')}"))
-            print(C(f"       {_DIM}{lskin['desc']}{_R}"))
-            print(C(f"       {_YELL}Perk:{_R} {_GREEN}{lskin['perk']}{_R}"))
-        elif active_lq:
-            steps = active_lq.get("steps",[])
-            print(C(f"  {_ORAN}Quest in progress: {active_lq['title']}{_R}"))
-            for step in steps:
-                p_  = step["progress"]; r_ = step["required"]
-                bar = f"{'█'*p_}{'░'*(r_-p_)}"
-                col = _GREEN if p_>=r_ else _ORAN
-                print(C(f"  {col}[{bar}]{_R} {step['label']}: {p_}/{r_}"))
-        else:
-            lq_info = lquest["title"] if lquest else "???"
-            print(C(f"  {_DIM}🔒 Locked — complete the quest: {_YELL}{lq_info}{_R}"))
-            if lquest:
-                print(C(f"  {_DIM}{lquest['desc']}{_R}"))
-            print(C(f"  {_GOLD}[Q]{_R}{_DIM} Start legendary quest{_R}"))
+        clr()
+        print(C(f"\n{_GOLD}{_B}══════════════  🎨 CHARACTER CUSTOMISATION  ══════════════{_R}"))
+        cur_lbl = getattr(player, "_custom_style_label", None) or "Default"
+        print(C(f"{_WHITE}{_B}{player.name}{_R} {_DIM}the{_R} {_CYAN}{job_name}{_R}   "
+                f"{_DIM}wearing:{_R} {_GOLD}{cur_lbl}{_R}"))
         print()
 
-        print(C(f"  {_DIM}{'─'*52}{_R}"))
-        opts = f"  {_GOLD}[1-{len(styles)}]{_R} Pick style"
-        if unlocked: opts += f"   {_GOLD}[L]{_R} Legendary skin"
-        elif not active_lq: opts += f"   {_GOLD}[Q]{_R} Start quest"
-        opts += f"   {_GOLD}[0]{_R} Back"
-        print(C(opts))
+        # ── Big preview + details side by side ──────────────────
+        art = render_sprite(job_name, accent=s["colour"], legendary=is_leg)
+        aw  = sprite_width(job_name)
+        head_col = _GOLD if is_leg else _WHITE
+        tag = (f"{_RED}[LOCKED]{_R}" if locked else
+               f"{_GREEN}✓ wearing{_R}" if s["id"] == current else "")
+        info = [
+            f"{_DIM}{sel+1}/{len(options)}{_R}  {_sw(s['colour'])}  {head_col}{_B}{s['label']}{_R}  {tag}",
+            "",
+        ]
+        info += [f"{_DIM}{l}{_R}" for l in _wrap(s["desc"], 40)]
+        info += ["", f"{_YELL}Perk:{_R} {_GREEN}{s['perk']}{_R}"]
+        if locked and lquest:
+            info += ["", f"{_ORAN}Unlock: {lquest['title']}{_R}"]
+            info += [f"{_DIM}{l}{_R}" for l in _wrap(lquest["desc"], 40)]
+            if active_lq:
+                for st in active_lq.get("steps", []):
+                    done = st["progress"] >= st["required"]
+                    info.append(f"{_GREEN if done else _ORAN}{'✓' if done else '•'} "
+                                f"{st['label']}: {st['progress']}/{st['required']}{_R}")
+        h = max(len(art), len(info))
+        art = art + [" " * aw] * (h - len(art))
+        for i in range(h):
+            right = info[i] if i < len(info) else ""
+            print(C("  " + art[i] + "    " + right))
 
-        ch = input(C(f"\n{_GOLD}>{_R} ")).strip().lower()
-        if ch == "0": return
+        # ── All styles at a glance ──────────────────────────────
+        print()
+        chips = []
+        for i, o in enumerate(options):
+            mark = "▶" if i == sel else " "
+            name = o["label"].replace("⭐ ", "★ ")
+            if o["id"].startswith("lskin_") and not unlocked:
+                name += " (locked)"
+            tick = f"{_GREEN}✓{_R}" if o["id"] == current else " "
+            chips.append(f"{_GOLD}{mark}{_R}{_GOLD}[{i+1}]{_R} {_sw(o['colour'])} {name}{tick}")
+        for i in range(0, len(chips), 3):
+            print(C("   ".join(chips[i:i+3])))
+        print()
+        if msg:
+            print(C(msg)); msg = ""
+        keys = (f"{_GOLD}[A]{_R}/{_GOLD}[D]{_R} browse   {_GOLD}[Enter]{_R} wear this style   "
+                f"{_GOLD}[1-{len(options)}]{_R} jump")
+        if lskin and not unlocked and not active_lq:
+            keys += f"   {_GOLD}[Q]{_R} start legendary quest"
+        keys += f"   {_GOLD}[0]{_R} back"
+        print(C(keys))
+        ch = input(C(f"{_GOLD}>{_R} ")).strip().lower()
 
-        # Start legendary quest
-        if ch == "q" and not active_lq and not unlocked:
-            msg = start_legendary_quest(player)
-            print(C(f"\n  {_ORAN}{msg}{_R}"))
-            input(C(f"  {_DIM}(Press Enter){_R}")); continue
-
-        # Select legendary skin
-        if ch == "l" and unlocked and lskin:
-            chosen = lskin
-            if chosen["id"] == current:
-                print(C(f"\n  {_DIM}Already using {chosen['label']}.{_R}"))
-                input(C(f"  {_DIM}(Press Enter){_R}")); continue
-        else:
-            if not ch.isdigit() or not (1 <= int(ch) <= len(styles)):
-                continue
-            chosen = styles[int(ch)-1]
-
-        if chosen["id"] == current:
-            print(C(f"\n  {_DIM}Already using {chosen['label']}.{_R}"))
-            input(C(f"  {_DIM}(Press Enter){_R}")); continue
-
-        # Confirm screen
-        clr()
-        is_leg = chosen.get("id","").startswith("lskin_")
-        border = _GOLD if is_leg else _CYAN
-        print(C(f"\n{border}{_B}╔══════════════════════════════════════╗"))
-        print(C(f"║  {'✦ LEGENDARY STYLE' if is_leg else 'Confirm Style':<37}║"))
-        print(C(f"╚══════════════════════════════════════╝{_R}\n"))
-        print(C(f"  {_sw(chosen['colour'])}  {_GOLD if is_leg else _WHITE}{_B}{chosen['label']}{_R}  {chosen.get('sprite','')}"))
-        print(C(f"\n  {_DIM}{chosen['desc']}{_R}"))
-        print(C(f"\n  {_YELL}Perk:{_R} {_GREEN}{chosen['perk']}{_R}"))
-        if current:
-            print(C(f"\n  {_DIM}(Removes current style perk){_R}"))
-        print(C(f"\n  {_GOLD}[Y]{_R} Confirm   {_GOLD}[N]{_R} Cancel"))
-
-        if input(C(f"\n{_GOLD}>{_R} ")).strip().lower() != "y":
+        if ch in ("0", "b", "x"):
+            return
+        if ch in ("a", "<", "4a"):
+            sel = (sel - 1) % len(options); continue
+        if ch in ("d", ">"):
+            sel = (sel + 1) % len(options); continue
+        if ch.isdigit() and 1 <= int(ch) <= len(options):
+            sel = int(ch) - 1; continue
+        if ch == "q" and lskin and not unlocked and not active_lq:
+            msg = f"{_ORAN}{start_legendary_quest(player)}{_R}  {_DIM}(progress shows here and in the [J] journal){_R}"
             continue
-
-        revert_style(player)
-        apply_style(player, chosen)
-        current = chosen["id"]
-
-        clr()
-        prefix = f"{_GOLD}★" if is_leg else f"{_GREEN}✓"
-        print(C(f"\n{prefix}{_B} Style: {chosen['label']}!{_R}"))
-        print(C(f"  {_YELL}Perk active:{_R} {_GREEN}{chosen['perk']}{_R}"))
-        input(C(f"\n  {_DIM}(Press Enter){_R}"))
+        if ch in ("", "y", "e", "w"):
+            if locked:
+                msg = f"{_RED}Locked — complete the legendary quest '{lquest['title'] if lquest else '?'}' first.{_R}"
+                continue
+            if s["id"] == current:
+                msg = f"{_DIM}You're already wearing {s['label']}.{_R}"
+                continue
+            revert_style(player)
+            apply_style(player, s)
+            current = s["id"]
+            pre = f"{_GOLD}★" if is_leg else f"{_GREEN}✓"
+            msg = f"{pre}{_B} Now wearing {s['label']}!{_R}  {_YELL}Perk active:{_R} {_GREEN}{s['perk']}{_R}"

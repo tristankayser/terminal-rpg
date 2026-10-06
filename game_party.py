@@ -394,6 +394,12 @@ class Companion:
             "red":    _RED,   "white": _WHITE,
         }.get(self.colour_key, _WHITE)
 
+    def rest(self):
+        """Full heal (inn / Royal Suite)."""
+        self.hp = self.max_hp
+        self.mp = self.max_mp
+        self.status_effects = []
+
     def scale_to_level(self, new_level):
         gain = max(0, new_level - self.level)
         self.level  = new_level
@@ -565,6 +571,7 @@ class Clan:
         self.upgrades     = []       # list of upgrade names purchased
         self.gold_earned  = 0
         self.days_active  = 0
+        self.pending_gold = 0        # income waiting to be collected
 
     @property
     def rank(self): return CLAN_RANKS[min(self.rank_idx, len(CLAN_RANKS)-1)]
@@ -579,15 +586,23 @@ class Clan:
         return base
 
     def tick(self, days=1):
-        """Call whenever the player rests/advances time. Returns gold earned."""
+        """Called when the player rests (one day passes). Income accrues
+        into pending_gold. Returns gold earned."""
         self.days_active += days
         earned = self.passive_income * days
-        self.gold_earned += earned
+        self.pending_gold += earned
         # Auto-rank-up every 30 days
         new_rank = min(len(CLAN_RANKS)-1, self.days_active // 30)
         if new_rank > self.rank_idx:
             self.rank_idx = new_rank
         return earned
+
+    def collect(self):
+        """Pay out accrued income (used to be an infinite-gold button)."""
+        g = self.pending_gold
+        self.pending_gold = 0
+        self.gold_earned += g
+        return g
 
     def buy_upgrade(self, player, upgrade_name):
         for uh in CLAN_HALL_UPGRADES:
@@ -607,7 +622,7 @@ class Clan:
             "name": self.name, "leader": self.leader,
             "rank_idx": self.rank_idx, "members": self.members,
             "upgrades": self.upgrades, "gold_earned": self.gold_earned,
-            "days_active": self.days_active,
+            "days_active": self.days_active, "pending_gold": self.pending_gold,
         }
 
     @classmethod
@@ -618,6 +633,7 @@ class Clan:
         c.upgrades    = d.get("upgrades",[])
         c.gold_earned = d.get("gold_earned",0)
         c.days_active = d.get("days_active",0)
+        c.pending_gold= d.get("pending_gold",0)
         return c
 
 
@@ -634,7 +650,7 @@ def recruit_menu(player, town_name=""):
         print(C(f"╚══════════════════════════════════╝{_R}"))
 
         party = getattr(player, "party", None)
-        clan  = getattr(player, "clan",  None)
+        clan  = getattr(player, "owned_clan",  None)
 
         # ── Current party ───────────────────────────────────────
         print(C(f"\n{_CYAN}{_B}Current Party:{_R}"))
@@ -804,7 +820,7 @@ def _customise_companion(player):
 
 
 def _clan_menu(player):
-    clan = getattr(player, "clan", None)
+    clan = getattr(player, "owned_clan", None)
     while True:
         clr()
         print(C(f"\n{_GOLD}{_B}╔══════════════════════════════╗"))
@@ -823,23 +839,27 @@ def _clan_menu(player):
                 name = input(C(f"  Clan name: ")).strip()
                 if not name: continue
                 player.gold -= FOUND_COST
-                player.clan = Clan(name, player.name)
-                clan = player.clan
+                player.owned_clan = Clan(name[:24], player.name)
+                clan = player.owned_clan
                 print(C(f"{_GREEN}Clan '{name}' founded!{_R}")); input(C(f"{_DIM}Enter...{_R}"))
         else:
             print(C(f"  {_CYAN}{_B}{clan.name}{_R}  Rank: {_GOLD}{clan.rank}{_R}"))
             print(C(f"  Members: {clan.members}  Active: {clan.days_active} days"))
-            print(C(f"  Passive income: {_GOLD}+{clan.passive_income}g/day{_R}"))
-            print(C(f"  Total earned: {_GOLD}{clan.gold_earned}g{_R}\n"))
+            print(C(f"  Passive income: {_GOLD}+{clan.passive_income}g/day{_R}  {_DIM}(a day passes each time you rest at an inn or base){_R}"))
+            print(C(f"  Waiting to collect: {_GOLD}{clan.pending_gold}g{_R}   Total collected: {_GOLD}{clan.gold_earned}g{_R}\n"))
             print(C(f"  {_GOLD}[U]{_R} Upgrade clan hall"))
-            print(C(f"  {_GOLD}[C]{_R} Collect today's income"))
+            print(C(f"  {_GOLD}[C]{_R} Collect income"))
             print(C(f"  {_GOLD}[0]{_R} Back"))
             ch = input(C(f"\n{_GOLD}>{_R} ")).strip().lower()
             if ch == "0": return
             elif ch == "c":
-                earned = clan.tick(1)
+                earned = clan.collect()
                 player.gold += earned
-                print(C(f"{_GREEN}Collected {earned}g from clan!{_R}")); input(C(f"{_DIM}Enter...{_R}"))
+                if earned:
+                    print(C(f"{_GREEN}Collected {earned}g from your clan!{_R}"))
+                else:
+                    print(C(f"{_DIM}Nothing to collect yet — rest at an inn or your base to pass a day.{_R}"))
+                input(C(f"{_DIM}Enter...{_R}"))
             elif ch == "u":
                 _clan_upgrade_menu(player, clan)
 

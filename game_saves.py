@@ -11,18 +11,30 @@ Features:
   • Autosave interval configurable (default: every 30 actions)
 """
 
+from __future__ import annotations
+
 import os
 import json
 import time
 import datetime
 
 # ── Directory & file naming ──────────────────────────────────────
-SAVE_DIR      = "saves"
+# Anchored to the game folder, so launching from another working directory
+# doesn't make your saves "disappear".
+GAME_DIR      = os.path.dirname(os.path.abspath(__file__))
+SAVE_DIR      = os.path.join(GAME_DIR, "saves")
 MAX_SLOTS     = 5
 AUTOSAVE_SLOT = 0          # slot 0 is always autosave
 
 def _ensure_dir():
     os.makedirs(SAVE_DIR, exist_ok=True)
+
+def _write_json_atomic(path, data, **kw):
+    """Write to a temp file then rename — a crash mid-save can't corrupt a slot."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, **kw)
+    os.replace(tmp, path)
 
 def _player_path(slot: int) -> str:
     return os.path.join(SAVE_DIR, f"slot{slot}_player.json")
@@ -71,15 +83,17 @@ def save_slot(slot: int, player, world, playtime_seconds: int = 0) -> bool:
     """Save player + world to a slot. Returns True on success."""
     _ensure_dir()
     try:
-        with open(_player_path(slot), "w", encoding="utf-8") as f:
-            json.dump(player.to_dict(), f, indent=2, ensure_ascii=False)
-        world.save(_world_path(slot))
-        meta = _make_meta(player, slot, playtime_seconds)
-        with open(_meta_path(slot), "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
+        # Serialise everything first, so a failure can't leave half a slot
+        pdata = player.to_dict()
+        wdata = world.to_dict()
+        meta  = _make_meta(player, slot, playtime_seconds)
+        _write_json_atomic(_player_path(slot), pdata, indent=2)
+        _write_json_atomic(_world_path(slot), wdata)
+        _write_json_atomic(_meta_path(slot), meta, indent=2)
         return True
     except Exception as e:
-        print(f"  [Save error] slot {slot}: {e}")
+        from game_term import C
+        print(C(f"[Save error] slot {slot}: {e}"))
         return False
 
 
@@ -118,8 +132,8 @@ def migrate_legacy_saves():
     One-time migration: if old savegame.json / world_save.json exist,
     move them into slot 1 automatically.
     """
-    old_player = "savegame.json"
-    old_world  = "world_save.json"
+    old_player = os.path.join(GAME_DIR, "savegame.json")
+    old_world  = os.path.join(GAME_DIR, "world_save.json")
     if not (os.path.exists(old_player) and os.path.exists(old_world)):
         return False
     if slot_exists(1):
@@ -161,15 +175,16 @@ class AutoSave:
         autosave = AutoSave(interval=30)
         autosave.tick(player, world)   # call after each player action
     """
-    def __init__(self, interval: int = 30):
+    def __init__(self, interval: int = 30, base_playtime: int = 0):
         self.interval       = interval
         self._action_count  = 0
         self._playtime_start = time.time()
+        self._base_playtime  = base_playtime   # playtime carried over from the save
         self._last_save_time = 0.0
 
     def playtime(self) -> int:
-        """Elapsed seconds since this AutoSave was created."""
-        return int(time.time() - self._playtime_start)
+        """Total play time in seconds (this session + loaded save)."""
+        return self._base_playtime + int(time.time() - self._playtime_start)
 
     def tick(self, player, world) -> bool:
         """
@@ -221,28 +236,36 @@ def _draw_slot(slot: int, highlight: bool = False) -> list[str]:
     lines = []
     w = 52
 
+    from game_term import _vis
+
+    def row(content):
+        # Pad by VISIBLE width so the right border always lines up
+        pad = max(0, w - _vis(content))
+        return f"{border_col}│{_R}{content}{' '*pad}{border_col}│{_R}"
+
+    num = f"{_GOLD}{_B}[{slot}]{_R} "
+    lines.append(f"{border_col}┌{'─'*w}┐{_R}")
     if meta:
         auto_tag = f"  {_YELL}[AUTOSAVE]{_R}" if meta.get("autosave") else ""
-        label    = _slot_label(slot)
-        lines.append(f"{border_col}┌{'─'*w}┐{_R}")
-        lines.append(f"{border_col}│{_R}  {_B}{label}{_R}{auto_tag}"
-                     + " " * max(0, w - len(f"  {_slot_label(slot).replace(chr(27)+'[0m','').replace(chr(27)+'[38;2;240;200;60m','').replace(chr(27)+'[1m','').replace(chr(27)+'[0m','')}") - len("[AUTOSAVE]" if meta.get("autosave") else ""))
-                     + f"{border_col}│{_R}")
-        name_line = f"  {_WHITE}{_B}{meta['name']:<14}{_R}  Lv {_GREEN}{meta['level']:<3}{_R}  {_CYAN}{meta['job']:<16}{_R}"
-        lines.append(f"{border_col}│{_R}{name_line}{' '*(w-44)}{border_col}│{_R}")
-        loc_line  = f"  {_DIM}📍 {meta['location']:<28}  ⏱ {_fmt_playtime(meta.get('playtime',0)):<8}{_R}"
-        lines.append(f"{border_col}│{_R}{loc_line}{' '*(w-54)}{border_col}│{_R}")
-        time_line = f"  {_DIM}{meta['datetime']:<30}  💰{meta.get('gold',0)}g{_R}"
-        lines.append(f"{border_col}│{_R}{time_line}{' '*(w-50)}{border_col}│{_R}")
-        lines.append(f"{border_col}└{'─'*w}┘{_R}")
+        lines.append(row(f" {num}{_B}{_slot_label(slot)}{_R}{auto_tag}"))
+        lines.append(row(f"  {_WHITE}{_B}{str(meta['name'])[:14]:<14}{_R}  Lv {_GREEN}{meta['level']:<3}{_R}  {_CYAN}{str(meta['job'])[:16]:<16}{_R}"))
+        lines.append(row(f"  {_DIM}{str(meta['location'])[:26]:<26}  Played {_fmt_playtime(meta.get('playtime',0)):<8}{_R}"))
+        lines.append(row(f"  {_DIM}{meta['datetime']:<20}  {_GOLD}{meta.get('gold',0)}g{_R}"))
     else:
-        label = _slot_label(slot)
-        lines.append(f"{border_col}┌{'─'*w}┐{_R}")
-        lines.append(f"{border_col}│{_R}  {_B}{label}{_R}{' '*(w-8)}{border_col}│{_R}")
-        lines.append(f"{border_col}│{_R}  {_DIM}— Empty —{_R}{' '*(w-11)}{border_col}│{_R}")
-        lines.append(f"{border_col}└{'─'*w}┘{_R}")
-
+        lines.append(row(f" {num}{_B}{_slot_label(slot)}{_R}"))
+        lines.append(row(f"  {_DIM}— Empty —{_R}"))
+    lines.append(f"{border_col}└{'─'*w}┘{_R}")
     return lines
+
+
+def latest_slot():
+    """Slot number of the most recent save, or None."""
+    best = None
+    for s in range(0, MAX_SLOTS + 1):
+        m = _load_meta(s)
+        if m and slot_exists(s) and (best is None or m.get("timestamp", 0) > best[1]):
+            best = (s, m.get("timestamp", 0))
+    return best[0] if best else None
 
 
 def save_browser(mode: str = "load", current_player=None, current_world=None,
@@ -314,6 +337,7 @@ def save_browser(mode: str = "load", current_player=None, current_world=None,
                 continue
             try:
                 player, world = load_slot(slot_n)
+                world._loaded_playtime = (_load_meta(slot_n) or {}).get("playtime", 0)
                 return player, world
             except Exception as e:
                 print(C(f"  {_RED}Load failed: {e}{_R}"))

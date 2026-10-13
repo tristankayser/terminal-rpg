@@ -9,7 +9,7 @@
    ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝    ╚═╝  ╚═╝╚═╝      ╚═════╝
 ```
 
-### ⚔️ Anime Dungeon Chronicles — an open‑world RPG that lives in your terminal ⚔️
+### ⚔️ Terminal-RPG — an open‑world RPG that lives in your terminal ⚔️
 
 **Five continents. One ancient dragon. Zero graphics card required.**
 

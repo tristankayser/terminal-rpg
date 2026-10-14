@@ -168,7 +168,8 @@ def _throw_bomb(player, enemy, idx, allow_escape, log):
     """Bomb items. Returns 'escaped', 'used' or None (not used)."""
     from game_items import remove_items
     it = player.inventory[idx]
-    if it.name == "Smoke Bomb":
+    from game_items import ESCAPE_ITEMS, bomb_status
+    if it.name in ESCAPE_ITEMS:
         if not allow_escape:
             log.append(f"{C_RED}The smoke clears — there is no escaping this foe!{R}")
             return None
@@ -179,10 +180,11 @@ def _throw_bomb(player, enemy, idx, allow_escape, log):
     dmg = it.value + player.level * 3 + random.randint(0, 10)
     dealt = enemy.take_damage(dmg)
     log.append(f"{C_ORANGE}{B}BOOM!{R} {it.name} hits {enemy.name} for {dealt} damage!")
-    if random.randint(1, 100) <= 40:
-        from game_items import Burn
-        enemy.add_status(Burn(duration=2, damage=5 + player.level))
-        log.append(f"{C_ORANGE}{enemy.name} is set ablaze!{R}")
+    status, chance = bomb_status(it.name, player.level)
+    if status is not None and random.randint(1, 100) <= chance:
+        enemy.add_status(status)
+        verb = {"Burn": "is set ablaze", "Poison": "is poisoned", "Stun": "is stunned"}.get(status.name, "is hit hard")
+        log.append(f"{C_ORANGE}{enemy.name} {verb}!{R}")
     return "used"
 
 
@@ -384,7 +386,7 @@ def award_victory(player, enemy, used_potion=False):
                 print(C(f"{C_GOLD}🏆 Trophy added to {base.name}: {enemy.name}!{R}"))
                 break
 
-    drops = roll_drops(enemy.name)
+    drops = roll_drops(enemy.name, getattr(player, "level", 1))
     if drops:
         print(C(f"\n{C_YELLOW}Loot dropped:{R}"))
         for item in drops:
@@ -584,16 +586,36 @@ class Town:
             elif ch == "2": self._sell()
             elif ch == "0": break
 
+    # Shop tabs: key -> (label, item categories)
+    _SHOP_TABS = [("c", "Consumables", ("potion", "food", "bomb")),
+                  ("w", "Weapons", ("weapon",)),
+                  ("a", "Armour", ("armor", "helmet", "shield", "cloak")),
+                  ("t", "Trinkets", ("ring", "amulet")),
+                  ("m", "Materials", ("material", "key"))]
+
     def _buy(self):
         import copy
-        from game_items import STACKABLE_TYPES, item_count
-        from game_player import Player
+        from game_items import STACKABLE_TYPES, item_count, item_glyph, item_category, describe_effect
+        from game_icons import parse_inspect, inspect_item
         msg = ""
+        tab = "c"
+        page = 0
         while True:
             self._header("Shop — Buy")
             pc = self.player.job.name
-            print(C(f"\n{C_GOLD}Your gold: {self.player.gold}g{R}  {C_DIM}Class: {C_CYAN}{pc}{R}\n"))
-            for i,(item,price) in enumerate(self.shop_stock, 1):
+            print(C(f"\n{C_GOLD}Your gold: {self.player.gold}g{R}  {C_DIM}Class: {C_CYAN}{pc}{R}"))
+            tabs = []
+            for key, label, _ in self._SHOP_TABS:
+                on = key == tab
+                tabs.append(f"{C_GOLD}[{key.upper()}]{R}" + (f"{B}{C_WHITE} {label}{R}" if on else f"{C_DIM} {label}{R}"))
+            print(C("  ".join(tabs) + "\n"))
+            cats = dict((k, c) for k, _, c in self._SHOP_TABS)[tab]
+            shown = [(i, item, price) for i, (item, price) in enumerate(self.shop_stock, 1)
+                     if item_category(item) in cats]
+            per = max(6, H() - 17)
+            pages = max(1, (len(shown) + per - 1) // per)
+            page = min(page, pages - 1)
+            for i, item, price in shown[page * per:(page + 1) * per]:
                 ac = getattr(item,"allowed_classes",None)
                 can_use = (ac is None or pc in ac)
                 rcol = item.rarity_col() if hasattr(item,"rarity_col") else C_WHITE
@@ -604,7 +626,7 @@ class Town:
                         stat += f" {C_GREEN}[equipped]{R}"
                 else:
                     owned = item_count(self.player.inventory, item.name)
-                    stat = (f"  {C_DIM}{Player.describe_consumable(item)}{R}"
+                    stat = (f"  {C_DIM}{describe_effect(item)}{R}"
                             + (f" {C_DIM}(have {owned}){R}" if owned else ""))
                 if not can_use:
                     col = C_DIM
@@ -612,12 +634,26 @@ class Town:
                 else:
                     col = rcol if self.player.gold >= price else C_DIM
                     cnote = ""
-                print(C(f"{C_GOLD}{B}[{i:>2}]{R} {col}{item.name:<20}{R} {C_GOLD}{price:>4}g{R}{stat}{cnote}"))
+                print(C(f"{C_GOLD}{B}[{i:>2}]{R} {item_glyph(item)} {col}{item.name:<22}{R} {C_GOLD}{price:>4}g{R}{stat}{cnote}"))
+            if not shown:
+                print(C(f"{C_DIM}Nothing in this section today.{R}"))
+            if pages > 1:
+                print(C(f"\n{C_DIM}Page {page+1}/{pages}  —  [N] next  [P] prev{R}"))
             if msg:
                 print(C(f"\n{msg}")); msg = ""
-            print(C(f"\n{menu_opt(0,'Done')}   {C_DIM}Tip: '3x5' buys five of item 3{R}"))
+            print(C(f"\n{menu_opt(0,'Done')}   {C_DIM}'3x5' buys five of item 3  ·  '?3' inspects item 3{R}"))
             ch = prompt("Buy item #").lower().replace(" ", "")
             if ch in ("0", ""): return
+            n = parse_inspect(ch, len(self.shop_stock))
+            if n is not None:
+                inspect_item(self.shop_stock[n - 1][0], self.player)
+                continue
+            if ch in dict((k, 1) for k, _, _ in self._SHOP_TABS):
+                tab, page = ch, 0; continue
+            if ch == "n":
+                page = min(page + 1, pages - 1); continue
+            if ch == "p":
+                page = max(0, page - 1); continue
             qty = 1
             if "x" in ch:
                 ch, _, q = ch.partition("x")
@@ -802,8 +838,11 @@ class Town:
     # ── CRAFTING ─────────────────────────────────────────────
 
     def crafting_bench(self):
-        from game_items import material_counts, remove_items, inventory_add
+        from game_items import material_counts, remove_items, inventory_add, item_glyph
+        from game_icons import parse_inspect, inspect_item
         msg = ""
+        show_all = False      # False: only what you can craft now (+ near misses)
+        page = 0
         while True:
             self._header("Crafting Bench")
             mat_count = material_counts(self.player.inventory)
@@ -816,16 +855,30 @@ class Town:
                 for i in range(0, len(mats), 4):
                     print(C("   ".join(mats[i:i+4])))
 
-            print(C(f"\n{C_CYAN}Recipes:{R}  {C_DIM}([OK] craftable  [--] missing materials  [CLS] other class){R}"))
-            available = []
             pc = self.player.job.name
+            rows = []   # (rec, state) state: ok / miss / cls
             for rec in CRAFTING_RECIPES:
                 can = all(mat_count.get(k,0) >= v for k,v in rec["needs"].items())
                 cls_ok = (rec.get("classes") is None or pc in rec.get("classes",[]))
-                if can and cls_ok:
-                    available.append(rec)
-                    mark = f"{C_GREEN}[{len(available):>2}]{R}"
-                elif not cls_ok:
+                state = "ok" if (can and cls_ok) else ("cls" if not cls_ok else "miss")
+                if not show_all:
+                    # Ready recipes, plus ones you have at least one material for
+                    have_any = any(mat_count.get(k, 0) for k in rec["needs"])
+                    if state != "ok" and not (state == "miss" and have_any):
+                        continue
+                rows.append((rec, state))
+            rows.sort(key=lambda rs: {"ok": 0, "miss": 1, "cls": 2}[rs[1]])
+            n_ok = sum(1 for _, s in rows if s == "ok")
+
+            view = "all recipes" if show_all else "craftable & close"
+            print(C(f"\n{C_CYAN}Recipes — {view}:{R}  {C_DIM}([#] craftable  [--] missing materials  [CLS] other class){R}"))
+            per = max(5, H() - 20 - (len(mat_count) + 3) // 4)
+            pages = max(1, (len(rows) + per - 1) // per)
+            page = min(page, pages - 1)
+            for num, (rec, state) in enumerate(rows[page*per:(page+1)*per], page*per + 1):
+                if state == "ok":
+                    mark = f"{C_GREEN}[{num:>2}]{R}"
+                elif state == "cls":
                     mark = f"{C_YELLOW}[CLS]{R}"
                 else:
                     mark = f"{C_RED}[--]{R}"
@@ -833,20 +886,41 @@ class Town:
                     f"{(C_GREEN if mat_count.get(k,0) >= v else C_RED)}{k} {mat_count.get(k,0)}/{v}{R}"
                     for k,v in rec["needs"].items())
                 qty = f" x{rec['qty']}" if rec.get("qty", 1) > 1 else ""
-                print(C(f"{mark} {C_WHITE}{rec['name'] + qty:<22}{R} {needs}  {C_DIM}{rec.get('desc','')}{R}"))
+                proto = rec["result"]()
+                glyph = item_glyph(proto) if proto is not None else " "
+                rcol = proto.rarity_col() if proto is not None else C_WHITE
+                print(C(f"{mark} {glyph} {rcol}{rec['name'] + qty:<22}{R} {needs}  {C_DIM}{rec.get('desc','')}{R}"))
+            if not rows:
+                print(C(f"{C_DIM}Nothing you can craft yet — press [V] to browse every recipe.{R}"))
 
             if msg:
                 print(C(f"\n{msg}")); msg = ""
-            if not available:
-                print(C(f"\n{C_DIM}Nothing you can craft right now.{R}"))
-                input(C(f"{C_DIM}(Press Enter){R}")); return
-
-            print(C(f"\n{C_DIM}Type the number shown in green to craft it.{R}  {menu_opt(0,'Leave')}"))
-            ch = prompt("Craft #")
-            if ch == "0" or not ch.isdigit(): return
+            nav = f"  {C_DIM}Page {page+1}/{pages} [N]/[P]{R}" if pages > 1 else ""
+            print(C(f"\n{C_DIM}# crafts (green)  ·  ?# inspects the result  ·  "
+                    f"[V] {'show craftable' if show_all else 'show all'}{R}{nav}  {menu_opt(0,'Leave')}"))
+            ch = prompt("Craft #").lower().strip()
+            if ch in ("0", ""): return
+            if ch == "v":
+                show_all, page = not show_all, 0; continue
+            if ch == "n":
+                page = min(page + 1, pages - 1); continue
+            if ch == "p":
+                page = max(0, page - 1); continue
+            n = parse_inspect(ch, len(rows))
+            if n is not None:
+                proto = rows[n-1][0]["result"]()
+                if proto is not None:
+                    inspect_item(proto, self.player)
+                continue
+            if not ch.isdigit(): continue
             idx = int(ch)-1
-            if not (0 <= idx < len(available)): continue
-            rec = available[idx]
+            if not (0 <= idx < len(rows)): continue
+            rec, state = rows[idx]
+            if state != "ok":
+                msg = (f"{C_YELLOW}{rec['name']} is for other classes.{R}" if state == "cls"
+                       else f"{C_RED}You're missing materials for {rec['name']}.{R}")
+                continue
+            if n_ok == 0: continue
             results = [rec["result"]() for _ in range(rec.get("qty", 1))]
             # Dry run on a copy: the old check let a full bag eat the
             # materials when a new stackable result had no stack to join
@@ -878,23 +952,39 @@ class Town:
             worn = [(s, it) for s, it in player.equipped.items() if it]
             if not worn:
                 print(C(f"  {C_DIM}Nothing equipped.{R}"))
+            from game_icons import worn_row, entry_row, print_columns, parse_inspect, inspect_item
             for s, it in worn:
-                print(C(f"  {C_DIM}{s:<7}{R} {it.rarity_col()}{it.name:<22}{R} {C_DIM}{it.stat_line()}{R}"))
+                print(C(worn_row(s, it)))
             print(C(f"\n{C_CYAN}YOUR BAG  {C_DIM}({len(inv)}/{limit} slots){R}"))
             if not inv:
                 print(C(f"  {C_DIM}Empty. Defeat enemies and open chests to collect items.{R}"))
             else:
-                from game_player import Player
-                for i, it in enumerate(inv, 1):
-                    rcol = it.rarity_col() if hasattr(it,"rarity_col") else C_WHITE
-                    slot_tag = f"{C_DIM}[{it.slot}]{R}" if hasattr(it,"slot") else f"{C_DIM}[{it.item_type}]{R}"
-                    stat = (f"  {C_DIM}{it.stat_line()}{R}" if hasattr(it,"stat_line")
-                            else f"  {C_GREEN}{Player.describe_consumable(it)}{R}")
-                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{str(it):<26}{R} {slot_tag}{stat}"))
+                print_columns([entry_row(i, it) for i, it in enumerate(inv, 1)])
             print()
             print(C(f"  {C_GOLD}[E]{R}{C_DIM} Equip  {C_GOLD}[R]{R}{C_DIM} Unequip  {C_GOLD}[U]{R}{C_DIM} Use  "
+                    f"{C_GOLD}[X]{R}{C_DIM} Inspect (or ?3)  "
                     f"{C_GOLD}[D]{R}{C_DIM} Drop  {C_GOLD}[G]{R}{C_DIM} Guild Storage  {C_GOLD}[0]{R}{C_DIM} Back{R}"))
             ch = prompt("Choice").lower()
+            n = parse_inspect(ch, len(inv))
+            if n is not None or ch in ("x", "?"):
+                if n is None:
+                    every = inv + [it for _, it in worn]
+                    q = prompt(f"Inspect # (1-{len(inv)} bag, W1-W{len(worn)} worn)").lower()
+                    if q.isdigit() and 1 <= int(q) <= len(inv):
+                        n = int(q)
+                    elif q[:1] == "w" and q[1:].isdigit() and 1 <= int(q[1:]) <= len(worn):
+                        n = len(inv) + int(q[1:])
+                    else:
+                        continue
+                else:
+                    every = inv
+                target = every[n - 1]
+                key = inspect_item(target, player, f"{C_GOLD}[E]{R}{C_DIM} Equip{R}"
+                                   if hasattr(target, "slot") and target in inv else "")
+                if key == "e" and hasattr(target, "slot") and target in inv:
+                    ok, msg = player.equip(target)
+                    print(C(f"{C_GREEN if ok else C_RED}{msg}{R}")); input(C(f"{C_DIM}(Enter){R}"))
+                continue
             if ch == "0": break
             elif ch == "e": player.equip_item()
             elif ch == "r": player.unequip_item()
@@ -909,6 +999,9 @@ class Town:
                         n = int(q) if q.isdigit() and 1 <= int(q) <= it.qty else it.qty
                     if it.item_type == "god":
                         if prompt(f"Really drop {it.name}? It saves your life! (y/n)").lower() != "y":
+                            continue
+                    if it.item_type == "key" or getattr(it, "rarity", "") in ("epic", "legendary"):
+                        if prompt(f"Really drop {it.name}? It's gone for good. (y/n)").lower() != "y":
                             continue
                     name = it.name
                     if isinstance(it, ItemStack):
@@ -927,10 +1020,8 @@ class Town:
             if not gs.items:
                 print(C(f"  {C_DIM}Empty. Store items here to free up bag space.{R}"))
             else:
-                for i, it in enumerate(gs.items, 1):
-                    rcol = it.rarity_col() if hasattr(it,"rarity_col") else C_WHITE
-                    stat = f"  {C_DIM}{it.stat_line()}{R}" if hasattr(it,"stat_line") else ""
-                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{str(it):<26}{R}{stat}"))
+                from game_icons import entry_row, print_columns
+                print_columns([entry_row(i, it) for i, it in enumerate(gs.items, 1)])
             print()
             print(C(f"  {C_GOLD}[W]{R}{C_DIM} Withdraw  {C_GOLD}[S]{R} Store from bag  {C_GOLD}[0]{R} Back{R}"))
             ch = prompt("Choice").lower()

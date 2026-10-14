@@ -78,6 +78,26 @@ def status_header(player):
 # COMBAT
 # ═══════════════════════════════════════════════════════════════
 
+def _members(player):
+    """Companions in the party (empty list if there is no usable party)."""
+    try:
+        return list(getattr(getattr(player, "party", None), "members", None) or [])
+    except Exception:
+        return []
+
+
+def _mates(player):
+    """Alive companions."""
+    out = []
+    for m in _members(player):
+        try:
+            if m.is_alive():
+                out.append(m)
+        except Exception:
+            continue
+    return out
+
+
 def _capture(log, fn, *args, **kwargs):
     """Run fn while capturing everything it prints into the combat log."""
     import io, contextlib
@@ -154,18 +174,19 @@ def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="
 
     adds = _adds_of(enemy) if is_boss else []
     boss_lines = _boss_header_lines(player, enemy, adds, target) if is_boss else []
-    has_team = bool(player.party.members)
+    has_team = bool(_members(player))
 
     # Fit everything into the terminal: sprites only when there is room
     rows = H()
-    fixed = 13 + len(boss_lines) + (1 if has_team else 0) + (1 if note else 0)
+    # title(2) + gap(1) + FOE + YOU + log header + divider + menu(2) + prompt(2)
+    fixed = 11 + len(boss_lines) + (1 if has_team else 0) + (1 if note else 0)
     from game_art import player_look
     acc, leg = player_look(player)
     art = side_by_side(player.job.name, getattr(enemy, "sprite", enemy.name),
                        gap=10, left_accent=acc, left_legendary=leg)
     avail = rows - fixed
-    if avail >= len(art) + 1 + 4:
-        log_n = max(4, min(8, avail - len(art) - 1))
+    if avail >= len(art) + 1 + 3:
+        log_n = max(3, min(8, avail - len(art) - 1))
         print()
         for art_line in art:
             print(art_line)
@@ -178,7 +199,8 @@ def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="
     phase = ""
     if not is_boss and getattr(enemy, "phase", 1) >= 2:
         phase = f"  {C_ORANGE}{B}⚡PHASE {enemy.phase}{R}"
-    print(C(f"{C_RED}{B}FOE {R} {C_RED}{enemy.name[:16]:<16}{R} HP {hp_bar(enemy.hp, enemy.max_hp)}{eff_str}{phase}{tmark}"))
+    nw = 26 if is_boss else 16
+    print(C(f"{C_RED}{B}FOE {R} {C_RED}{enemy.name[:nw]:<{nw}}{R} HP {hp_bar(enemy.hp, enemy.max_hp)}{eff_str}{phase}{tmark}"))
     for ln in boss_lines:
         print(C(ln))
     p_eff = ("  " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in player.status_effects)) if player.status_effects else ""
@@ -191,7 +213,7 @@ def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="
         mates = "  ".join(
             (f"{m._col() if hasattr(m, '_col') else C_WHITE}{m.name}{R} {C_DIM}{m.hp}/{m.max_hp}{R}"
              if m.is_alive() else f"{C_DIM}{m.name} (down){R}")
-            for m in player.party.members)
+            for m in _members(player))
         print(C(f"{C_CYAN}{B}TEAM{R}  {mates}"))
 
     # Combat log — the last few things that happened
@@ -447,7 +469,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
         _capture(log, player.tick_buffs)
 
         # ── Party members act (they follow the hero's target) ──
-        mates_alive = player.party.alive_members()
+        mates_alive = _mates(player)
         if enemy.is_alive() and mates_alive:
             for companion in mates_alive:
                 if not enemy.is_alive():
@@ -457,7 +479,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
                 tgt._incoming = (companion_damage_type(companion), "companion")
                 tgt._dodge_next = True
                 try:
-                    _capture(log, companion.combat_action, player, tgt, player.party.members)
+                    _capture(log, companion.combat_action, player, tgt, _members(player))
                 finally:
                     tgt._incoming = None
                     tgt._dodge_next = False
@@ -476,25 +498,25 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
                         log.append(f"{C_DIM}{a.name} is stunned.{R}")
                     else:
                         _capture(log, a.basic_attack,
-                                 pick_target(player, player.party.alive_members()))
+                                 pick_target(player, _mates(player)))
                 _capture(log, a.process_status_end)
             _report_fallen(log, enemy)
 
         # ── Enemy turn ──
-        alive_before = [m for m in player.party.members if m.is_alive()]
+        alive_before = _mates(player)
         if enemy.is_alive() and player.is_alive():
             _capture(log, enemy.process_status_start)
             if is_boss:
                 log.extend(enemy.check_phase())
             if enemy.is_alive():
                 if is_boss:
-                    _capture(log, enemy.act, player, player.party.alive_members(),
+                    _capture(log, enemy.act, player, _mates(player),
                              defending, base_defense)
                 elif enemy.is_stunned():
                     log.append(f"{C_YELLOW}{enemy.name} is stunned and can't act!{R}")
                 else:
                     _capture(log, enemy.basic_attack,
-                             pick_target(player, player.party.alive_members()))
+                             pick_target(player, _mates(player)))
             _capture(log, enemy.process_status_end)
             if is_boss:
                 enemy.player_defended_last = defending
@@ -555,7 +577,7 @@ def _report_fallen(log, enemy):
 
 def _end_of_battle_cleanup(player, combat_only):
     """Blindness and bleeding end with the battle (for hero and companions)."""
-    for who in [player] + list(getattr(player.party, "members", []) or []):
+    for who in [player] + _members(player):
         effs = getattr(who, "status_effects", None)
         if isinstance(effs, list):
             effs[:] = [e for e in effs if e.name not in combat_only]

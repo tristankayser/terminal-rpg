@@ -202,10 +202,10 @@ class Enemy:
                 self.notes.append(f"{self.name} sidesteps the blow!")
                 return 0
         mult = self.damage_mult(dtype, source)
-        if mult >= 1.5:
+        if dtype and dtype in self.weak:
             self.notes.append(f"{TYPE_COLOUR.get(dtype, '')}{_B}WEAK!{_R} {self.name} "
                               f"reels from {dtype} damage.")
-        elif mult < 0.95 and dtype:
+        elif dtype and self.resist.get(dtype, 1.0) < 0.95:
             self.notes.append(f"{self.name} resists {dtype}.")
         dmg = int(dmg * mult)
         actual = max(1, dmg - self.defense // 4)
@@ -675,6 +675,10 @@ _DEFAULT_KIT = dict(
 
 BREAK_MULT = 1.6      # extra damage taken while broken / exposed
 CHARGE_MULT = 1.15    # charged attacks hit this much harder than their listed mult
+PARTY_HP_PER_POWER = 0.95  # boss HP bonus per "one hero's worth" of companion ATK
+PARTY_HP_PER_SOAK = 0.40   # ... and per "one hero's worth" of companion HP (they soak hits)
+PARTY_ATK_PER_MATE = 0.04  # boss ATK bonus per companion
+COMPANION_HIT = 0.7        # single-target boss blows on companions land softer
 
 
 class BossEnemy(Enemy):
@@ -732,7 +736,24 @@ class BossEnemy(Enemy):
         self._prepared = True
         self.difficulty = get_difficulty(player)
         d = DIFFICULTY[self.difficulty]
-        self.max_hp = max(1, int(self.max_hp * d["hp"]))
+        # Every companion adds damage and soaks hits: bosses grow to match
+        # (scaled by their attack relative to the hero's, so it adapts to
+        # however strong companions are at this point of the game).
+        try:
+            alive = [m for m in player.party.members if m.is_alive()]
+            power = sum(max(0, getattr(m, "atk", 0)) for m in alive)
+            # skills and crits make the hero hit ~1.3x their listed ATK
+            ratio = min(3.0, power / max(1.0, player.combat_atk() * 1.3))
+            bulk = sum(max(0, getattr(m, "max_hp", 0)) for m in alive)
+            soak = min(3.0, bulk / max(1, player.max_hp))
+        except Exception:
+            alive, ratio, soak = [], 0.0, 0.0
+        self.party_size = len(alive)
+        party_hp = 1.0 + PARTY_HP_PER_POWER * ratio + PARTY_HP_PER_SOAK * soak
+        party_atk = 1.0 + PARTY_ATK_PER_MATE * len(alive)
+        self.enrage_at += len(alive)            # bigger fights last a little longer
+        self.max_hp = max(1, int(self.max_hp * d["hp"] * party_hp))
+        self.atk = max(1, int(self.atk * party_atk))
         self.hp = self.max_hp
         self.atk = max(1, int(self.atk * d["atk"]))
         self.enrage_at = max(6, self.enrage_at + d["enrage"])
@@ -768,7 +789,15 @@ class BossEnemy(Enemy):
     def _after_hit(self, actual, dtype, source):
         if not self.shield_max or self.broken or self.hp <= 0:
             return
-        pips = 2 if dtype and dtype in self.weak else 1
+        weak_hit = bool(dtype and dtype in self.weak)
+        if source == "companion":
+            # Companions only chip the guard by exploiting a weakness, so
+            # breaking stays the hero's job even with a full party.
+            pips = 1 if weak_hit else 0
+        else:
+            pips = 2 if weak_hit else 1
+        if not pips:
+            return
         before = self.shield
         self.shield = max(0, self.shield - pips)
         half = self.shield_max // 2
@@ -1104,6 +1133,8 @@ class BossEnemy(Enemy):
             crit, dmg = self.calc_crit(max(1, base)) if not charged else (False, max(1, base))
             tag = " [CRIT!]" if crit else ""
             is_hero = target is player
+            if not is_hero and scale == 1.0:
+                base = int(base * COMPANION_HIT)   # bosses focus their worst on the hero
             if is_hero and ctx["defending"] and mv.get("pierce"):
                 player.defense = ctx["base_def"]
                 dmg = int(dmg * 1.3)
@@ -1233,7 +1264,16 @@ ROLE_AGGRO = {"warrior": 75, "tank": 75, "rogue": 30, "mage": 40, "healer": 45}
 
 
 def pick_target(player, party=None):
-    """Weighted random target: the hero or an alive companion."""
+    """Weighted random target: the hero or an alive companion.
+    Prefers the companions module's own Party.pick_target(player) when present."""
+    try:
+        pt = getattr(getattr(player, "party", None), "pick_target", None)
+        if callable(pt):
+            t = pt(player)
+            if t is not None and (t is player or (hasattr(t, "take_damage") and t.is_alive())):
+                return t
+    except Exception:
+        pass
     cands = [(player, 100)]
     for m in party or []:
         try:

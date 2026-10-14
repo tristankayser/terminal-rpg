@@ -955,27 +955,8 @@ class WorldMap:
             return
 
         if loc["type"] in ("city","port"):
-            from game_systems import Town
-            from game_party import recruit_menu as town_recruitment_menu
-            cont=next((c for c in CONTINENTS if c["id"]==loc.get("continent","")),None)
-            rname=cont["name"] if cont else ""
-
-            # For PORTS: offer ship boarding choice immediately
-            if loc["type"]=="port":
-                ship=next((s for s in self.ships
-                           if s["port_name"]==loc["name"]),None)
-                clear()
-                print(C(f"\n{C_TEAL}{B_}╔══════════════════════════════════════════════╗"))
-                print(C(f"║  ⚓  {loc['name']:<42}║"))
-                print(C(f"╚══════════════════════════════════════════════╝{R_}\n"))
-                print(C(f"{C_GOLD}[1]{R_} {C_WHITE}Enter {loc['name']} town{R_}"))
-                if ship:
-                    print(C(f"{C_GOLD}[2]{R_} {C_WHITE}Board ship — sail to another continent{R_}"))
-                print(C(f"{C_GOLD}[0]{R_} {C_DIM}Leave{R_}"))
-                ch = input(C(f"\n{C_GOLD}>{R_} ")).strip()
-                if ch=="0": return
-                if ch=="2" and ship:
-                    self._board_ship(player,ship); return
+            # Ports no longer ask "enter town / board ship" first: the ship is
+            # docked in the walkable harbour (gangplank, captain, dockmaster).
 
             # story triggers
             completed=player.stories.on_visit(loc["name"],player)
@@ -988,16 +969,34 @@ class WorldMap:
                     print(C(f"\n{s['colour']}{B_}NEW SIDE STORY UNLOCKED: {s['title']}{R_}"))
                     print(C(f"\n{C_DIM}{s['intro']}{R_}"))
                     input(C(f"\n{C_DIM}(Press Enter){R_}"))
-            town=Town(player,loc["name"],rname)
-            town.set_companion_callback(lambda: town_recruitment_menu(player,loc["name"]))
-            town.set_base_info(loc.get("continent",""), loc["x"], loc["y"])
-            town.set_world(self, autosave)
-            if loc["type"]=="port":
+            # Walkable town (game_towns); [M] inside still opens the classic
+            # menu, and run_town falls back to it if the scene can't be built.
+            try:
+                from game_towns import run_town, make_town
+            except Exception as e:
+                run_town=None
+                try:
+                    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),"crash.log"),"a") as fh:
+                        fh.write(f"game_towns import failed: {e!r}\n")
+                except Exception:
+                    pass
+            if run_town is not None:
+                town=make_town(self, player, loc, autosave)
+                result=run_town(self, player, loc, autosave, town)
+            else:
+                from game_systems import Town
+                from game_party import recruit_menu as town_recruitment_menu
+                cont=next((c for c in CONTINENTS if c["id"]==loc.get("continent","")),None)
+                town=Town(player,loc["name"],cont["name"] if cont else "")
+                town.set_companion_callback(lambda: town_recruitment_menu(player,loc["name"]))
+                town.set_base_info(loc.get("continent",""), loc["x"], loc["y"])
+                town.set_world(self, autosave)
                 _ship_ref=next((s for s in self.ships if s["port_name"]==loc["name"]),None)
-                if _ship_ref:
+                if loc["type"]=="port" and _ship_ref:
                     town.set_ship(self,_ship_ref,player)
-            town.enter()
-            if self._loc_at(self.player_x,self.player_y) is loc:
+                town.enter()
+                result="left"
+            if result=="left" and self._loc_at(self.player_x,self.player_y) is loc:
                 self.last_msg=f"{C_GOLD}Left {loc['name']}.{R_}"
 
         elif loc["type"]=="dungeon":

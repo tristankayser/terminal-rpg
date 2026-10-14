@@ -222,6 +222,7 @@ class PlayerBase:
 
         # Rest counter: how many times player has slept here
         self.total_rests = 0
+        self.last_garden_day = None   # garden grows at most once per in-game day
 
     # ── Properties ───────────────────────────────────────────────
 
@@ -287,20 +288,29 @@ class PlayerBase:
             player.mp = player.max_mp
             print(C(f"{_GOLD}Royal Suite: fully restored!{_R}"))
 
-        # Party healing
-        if player.party.members:
+        # Party healing (active party and the companions waiting on the bench)
+        roster = list(getattr(player.party, "roster", player.party.members))
+        if roster:
             print(C(f"\n{_CYAN}Party rests:{_R}"))
-            for m in player.party.members:
+            for m in roster:
                 old = m.hp
                 if t >= 4:
                     m.rest()
                 else:
                     m.hp = max(m.hp, min(m.max_hp, int(m.max_hp * regen / 100)))
                     m.mp = max(m.mp, min(m.max_mp, int(m.max_mp * regen / 100)))
-                print(C(f"  {m.name}: {old} → {m.hp} HP"))
+                    m.status_effects = []
+                if m in player.party.members:
+                    print(C(f"  {m.name}: {old} → {m.hp} HP"))
 
         # Garden harvest
-        if self.rooms["garden"] > 0:
+        try:
+            from game_party import current_day
+            today = current_day(player)
+        except Exception:
+            today = None
+        if self.rooms["garden"] > 0 and (today is None or today != self.last_garden_day):
+            self.last_garden_day = today
             self.garden_rests += 1
             if self.garden_rests >= 2:   # harvest every 2 rests
                 self.garden_rests = 0
@@ -357,6 +367,7 @@ class PlayerBase:
             "trophies":       self.trophies,
             "garden_rests":   self.garden_rests,
             "total_rests":    self.total_rests,
+            "last_garden_day": self.last_garden_day,
         }
 
     @classmethod
@@ -366,6 +377,7 @@ class PlayerBase:
         b.trophies     = d.get("trophies", [])
         b.garden_rests = d.get("garden_rests", 0)
         b.total_rests  = d.get("total_rests", 0)
+        b.last_garden_day = d.get("last_garden_day")
         from game_items import item_from_dict
         b.storage = [item_from_dict(i) for i in d.get("storage", [])]
         return b
@@ -438,6 +450,7 @@ class BaseMenu:
             print(C(f"{_opt('5', 'Garden',            'Harvest produce' if self.base.rooms['garden'] else 'Plant a garden first')}"))
             print(C(f"{_opt('6', 'Trophy Wall',       f'{len(self.base.trophies)} trophies' if self.base.rooms['trophy'] else 'Build trophy wall first')}"))
             print(C(f"{_opt('7', 'Rename Base',       '')}"))
+            print(C(f"{_opt('8', 'Companions',        'Party, bench, gear & customisation')}"))
             print(C(f"{_opt('0', 'Leave',             '')}"))
 
             ch = input(C(f"\n{_GOLD}>{_R} ")).strip()
@@ -448,6 +461,9 @@ class BaseMenu:
             elif ch == "5": self._garden_menu()
             elif ch == "6": self._trophy_menu()
             elif ch == "7": self._rename()
+            elif ch == "8":
+                from game_party import party_menu
+                party_menu(self.player, can_swap=True)
             elif ch == "0": break
             else:
                 print(f"  {_R}Invalid.{_R}"); input(C(f"{_DIM}(Enter){_R}"))
@@ -656,12 +672,12 @@ class BaseMenu:
         tier = ROOMS["garden"]["tiers"][gt-1]
         print(C(f"\n{_CYAN}{_B}════  GARDEN  ════{_R}\n"))
         print(C(f"{_WHITE}{tier['name']}{_R}"))
-        print(C(f"{_DIM}Yields {tier['yield']}x {tier['item']} every 2 rests at base.{_R}"))
-        print(C(f"{_DIM}Rests since last harvest: {_GOLD}{self.base.garden_rests}/2{_R}"))
+        print(C(f"{_DIM}Yields {tier['yield']}x {tier['item']} every 2 days — rest at your base once a day to tend it.{_R}"))
+        print(C(f"{_DIM}Days grown since last harvest: {_GOLD}{self.base.garden_rests}/2{_R}  {_R}"))
         if self.base.garden_rests >= 2:
             print(C(f"\n{_GREEN}★ Ready to harvest! Rest at your base to collect.{_R}"))
         else:
-            print(C(f"\n{_DIM}Rest at base {2-self.base.garden_rests} more time(s) to harvest.{_R}"))
+            print(C(f"\n{_DIM}Rest here on {2-self.base.garden_rests} more day(s) to harvest.{_R}"))
         input(C(f"\n{_DIM}(Press Enter){_R}"))
 
     # ── Trophy wall ───────────────────────────────────────────────

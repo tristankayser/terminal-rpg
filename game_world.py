@@ -719,7 +719,7 @@ class WorldMap:
             self.last_msg=f"{C_BLUE}The sea blocks you. Find a port and board a ship.{R_}"; return
         self.player_x,self.player_y=nx,ny
         self.turn_count+=1; self._reveal(radius=6); player.tick_stealth()
-        player.party.scale_all(player.level)
+        player.party.scale_all(player.level, turn=self.turn_count, world=self, player=player)
         # Tick god immunity
         if getattr(player,"god_immunity_turns",0) > 0:
             player.god_immunity_turns -= 1
@@ -1010,6 +1010,10 @@ class WorldMap:
             result=d.enter(player)
             if result=="cleared":
                 player.flags[f"dungeon_cleared_{name}"]=True
+                if not cleared:   # first clear: a prisoner may be in the cells (game_party)
+                    try:
+                        from game_party import dungeon_prisoner_event; dungeon_prisoner_event(player,name,danger)
+                    except Exception: pass
                 completed=player.stories.on_dungeon_clear(name,player)
                 self._handle_story_completions(completed)
                 self.last_msg=f"{C_GOLD}★ {name} conquered!{R_}"

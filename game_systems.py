@@ -393,6 +393,8 @@ def award_victory(player, enemy, used_potion=False):
     else:
         print(C(f"\n{C_DIM}{T('combat.no_drops')}{R}"))
 
+    if hasattr(player, "party") and hasattr(player.party, "after_victory"): player.party.after_victory(player, enemy)  # companions: XP share, passives, loyalty
+
     # Story progress (used to only be counted on the world map, so story
     # steps that need dungeon enemies — e.g. 8 Cultists — were impossible)
     completed = []
@@ -1054,12 +1056,10 @@ class Town:
 # ═══════════════════════════════════════════════════════════════
 
 def pass_day(player):
-    """One night's rest at an inn or base: the player's clan earns income."""
-    clan = getattr(player, "owned_clan", None)
-    if clan:
-        earned = clan.tick(1)
-        print(C(f"{C_GOLD}Your clan '{clan.name}' earned {earned}g today "
-                f"(collect it from the Clan menu).{R}"))
+    """One night's rest at an inn or base: the player's clan settles its
+    income — at most once per in-game day (resting again pays nothing)."""
+    from game_party import clan_daily_tick
+    clan_daily_tick(player)
 
 
 # Dungeons live in game_dungeon.py (multi-floor). Kept for old imports.

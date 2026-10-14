@@ -121,7 +121,7 @@ def sanitize_name(s, maxlen=20):
     no wide/combining characters that would break the layout."""
     s = _strip_ansi(str(s or ""))
     keep = []
-    for ch in s:
+    for ch in s.replace("\t", " ").replace("\n", " ").replace("\r", " "):
         cat = unicodedata.category(ch)
         if cat[0] in ("C", "M") or cat in ("Zl", "Zp"):
             continue

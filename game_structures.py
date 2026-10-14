@@ -574,12 +574,17 @@ def _new_scene(loc, tpl, sub, colour, world, night=False, fog=False, sight=7):
 
 
 def _npc(x, y, name, title, lines, npc_id=None, colour=None, ai="static", interact=None, radius=2):
+    if npc_id and interact is None:
+        interact = _with_story(None)
     return Entity(x, y, "@", colour or fg(240, 210, 140), name, kind="npc", lines=lines,
                   ai=ai, npc_id=npc_id, title=title, interact=interact, radius=radius)
 
 
-def _with_story(fn_lines):
-    """Wrap an NPC interact so story-aware dialogue (npc_dialogue) comes first."""
+def _with_story(fn):
+    """NPC interact wrapper: story-aware lines first (npc_dialogue), then any
+    story popups the talk just triggered, then the NPC's own behaviour
+    (fn(scene, player, ent)); plain NPCs (fn=None) only chat when the story
+    had nothing to say."""
     def interact(sc, pl, e):
         extra = None
         try:
@@ -589,7 +594,17 @@ def _with_story(fn_lines):
             extra = None
         for line in extra or []:
             sc.talk_box(e, line, pl)
-        return fn_lines(sc, pl, e)
+        try:
+            from game_stories import pending_popups, flush_story_popups
+            if pending_popups():
+                sc.modal(flush_story_popups, pl)
+        except Exception:
+            pass
+        if fn is not None:
+            return fn(sc, pl, e)
+        if not extra:
+            sc.talk_box(e, None, pl)
+        return None
     return interact
 
 
@@ -1041,10 +1056,11 @@ def build_wizard_tower(world, player, loc):
     sc.add_entity(_chest_ent(cx, cy, loc, 0, world, bonus=1, gold=(40, 90), extra=["Mana Stone"], name="Reagent chest"))
     ox, oy = sc.find("O")[0]
 
-    def orb(s, pl):
+    def orb(s, pl, e):
         n = _reveal_area(world, loc, 12)
         return f"{C_PURP}The scrying orb clouds, then clears: the land around the tower ({n} tiles) is revealed.{R_}"
-    sc.add_door(ox, oy + 1, "Gaze into the scrying orb", orb, tile=None)
+    sc.set_tile(ox, oy, "_")
+    sc.add_entity(Entity(ox, oy, "●", fg(200, 150, 255), "Scrying orb", kind="object", interact=orb))
     return sc
 
 
@@ -1283,7 +1299,7 @@ LODGE_TPL = r"""
   T,,,%%%%%%%%%%%%%,,,,,,,,,,T
   T,,,%___t__?___F%,,,,N,,,,,T
   T,,,%_&_________%,,,,,,,,,,T
-  T,,,%_____$__U__%,,,,,,>,,,T
+  T,,,%________$U_%,,,,,,>,,,T
   T,,,%%%%%%+%%%%%%,,,,,,,,,,T
   T,,,,,,,,,:,,,,,,,,,,,,,,,,T
   TT,,,,,,,,:,,,,,,,,,,,,,,,TT
@@ -1419,7 +1435,7 @@ LIGHTHOUSE_TPL = r"""
   ~~~~~ww~~~V_l_V~~~ww~~~~~~
   ~~~wwzzzzzV_>_Vzzzzzww~~~~
   ~~wzzzzzzzV___Vzzzzzzzw~~~
-  ~wzzzN?zzzV_&_Vzzz$zzzzw~~
+  ~wzzzN?zzzV&__Vzzz$zzzzw~~
   ~zzzzzzzzz7H+H8zzzzzzzzzw~
   zzzzzzBzzzzz:zzzzzzzzzzzzz
   zzzzzzzzzzzz:zzzzzzzzzzzzz

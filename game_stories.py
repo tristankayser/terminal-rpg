@@ -464,9 +464,11 @@ class StoryManager:
         if key not in self.log:
             self.log.append(key)
         completed.append((kind, step))
+        entry = {"kind": kind, "sid": sid, "step": step, "next": None, "items": items}
+        _queue(entry)            # before _advance, so its popup precedes any decision/epilogue
         nxt = self._advance(kind, sid, story, st, player)
-        _queue({"kind": kind, "sid": sid, "step": step, "next": effective_step(nxt),
-                "items": items, "story_done": st.get("complete", False)})
+        entry["next"] = effective_step(nxt)
+        entry["story_done"] = st.get("complete", False)
 
     def _hit(self, step, etype, key, loc_type):
         for t, target in _step_pairs(step):

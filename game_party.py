@@ -343,7 +343,7 @@ class Companion:
             self.traits.append("starborn")
         self.gear = {"weapon": None, "armor": None, "trinket": None}
         self.style = {"id": "signature", "label": "Signature", "accent": list(d.get("accent", (220, 220, 220))),
-                      "crown": False}
+                      "crown": self.rarity == "legendary"}
         if self.starborn:
             self.style = {"id": "starborn", "label": "Starborn", "accent": list(STARBORN_ACCENT), "crown": True}
         self.marker = self._default_marker()
@@ -1305,11 +1305,32 @@ class Party:
             c = random.choice(alive)
             print(C(f"{c.tag()}: {_DIM}\"{c.line('idle')}\"{_R}"))
         _tick_companion_quests(player, enemy)
+        self.react_to_world(player)
         self._check_departures(player)
         try:
             post_battle_recruit_chance(player, enemy)
         except Exception:
             pass
+
+    def react_to_world(self, player):
+        """One-off loyalty reactions to big choices stored in player.flags
+        (e.g. the demon pact): companions who dislike demons are appalled."""
+        f = _flags(player)
+        for flag, topic, label in (("demon_pact", "demons", "your pact with the demon lord"),):
+            if not f.get(flag):
+                continue
+            for c in self.roster:
+                key = f"reacted_{flag}"
+                if c.flags.get(key):
+                    continue
+                c.flags[key] = True
+                r = c.reaction(topic)
+                if r < 0:
+                    c.change_affinity(-20)
+                    print(C(f"{c.tag()} {_RED}is appalled by {label}.{_R}"))
+                elif r > 0:
+                    c.change_affinity(10)
+                    print(C(f"{c.tag()} {_GREEN}approves of {label}.{_R}"))
 
     def _check_departures(self, player=None):
         for c in list(self.roster):
@@ -1466,7 +1487,7 @@ def _tick_companion_quests(player, enemy):
 # Sprites
 # ═══════════════════════════════════════════════════════════════
 
-def row_of_sprites(specs, gap=4, width=None):
+def row_of_sprites(specs, gap=4, width=None, raw=False):
     """Render several sprites side by side, feet aligned, labels underneath.
     specs: list of dicts {sprite, accent, legendary, label, sub}. Wraps onto
     more rows when the terminal is too narrow. Returns centred lines."""
@@ -1504,7 +1525,7 @@ def row_of_sprites(specs, gap=4, width=None):
                 cell = art[off] if 0 <= off < len(art) else ""
                 left = (w - aw) // 2
                 parts.append(" " * left + cell + " " * max(0, w - left - _vis(cell)))
-            out.append(C((" " * gap).join(parts)))
+            out.append((" " * gap).join(parts))
         for li in range(2):
             parts = []
             for art, aw, w, labels in row:
@@ -1512,8 +1533,33 @@ def row_of_sprites(specs, gap=4, width=None):
                 left = (w - _vis(t)) // 2
                 parts.append(" " * left + t + " " * max(0, w - left - _vis(t)))
             if any(b[3][li] for b in row):
-                out.append(C((" " * gap).join(parts)))
-    return out
+                out.append((" " * gap).join(parts))
+    return out if raw else [C(ln) for ln in out]
+
+
+def _two_col(left, right, gap=3):
+    """Print two blocks side by side (left lines padded to equal width)."""
+    lw = max([_vis(x) for x in left] or [0])
+    for i in range(max(len(left), len(right))):
+        l = left[i] if i < len(left) else ""
+        r = right[i] if i < len(right) else ""
+        print(C(l + " " * (lw - _vis(l) + gap) + r))
+
+
+def _opts(opts, width=None):
+    """Print [K] option chips, wrapping to the content width."""
+    width = (width or min(W(), 120)) - 4
+    line, out = "", []
+    for k, lbl in opts:
+        chip = f"{_GOLD}[{k}]{_R} {lbl}"
+        if line and _vis(line) + 3 + _vis(chip) > width:
+            out.append(line); line = chip
+        else:
+            line = (line + "   " + chip) if line else chip
+    if line:
+        out.append(line)
+    for ln in out:
+        print(C(ln))
 
 
 def _spec_for(c, sub=None):
@@ -1628,19 +1674,18 @@ def _offer_screen(player, cid, cost=None, reason=None, starborn=None):
                 f"{role_col(d['role'])}{d['role'].title()}{_R}"
                 + (f"   {_GOLD}{_B}✦ STARBORN ✦{_R}" if starborn else "")))
         print()
-        for ln in row_of_sprites([_def_spec(d, starborn)]):
-            print(ln)
-        print()
-        for ln in _wrap(d.get("bio", ""), 64):
-            print(C(f"{_DIM}{ln}{_R}"))
         dl = d.get("dialogue", {})
         greet = (dl.get("hire") or dl.get("idle") or ["..."])
         greet = greet[-1] if (_quest_done(player, d["recruit"].get("quest", {}).get("id", "-"))
                               or _flags(player).get(f"duel_won_{cid}")) else greet[0]
-        print(C(f"\n{_WHITE}\"{greet}\"{_R}"))
-        print(C(f"\n{_CYAN}Passive:{_R} {_DIM}{d.get('passive', '')}{_R}"))
+        info = [f"{_DIM}{ln}{_R}" for ln in _wrap(d.get("bio", ""), 52)] + [""]
+        info += [f"{_WHITE}{ln}{_R}" for ln in _wrap(f'"{greet}"', 52)] + [""]
+        pas = PASSIVES.get(d.get("passive_id"), {})
+        info.append(f"{_CYAN}Passive{_R} {_YELL}{pas.get('name', '—')}{_R}")
+        info += [f"{_DIM}{ln}{_R}" for ln in _wrap(pas.get("desc", ""), 52)]
         tr = ", ".join(TRAITS[t]["name"] for t in d.get("traits", []) if t in TRAITS)
-        print(C(f"{_CYAN}Traits:{_R} {_DIM}{tr or '—'}{_R}" + (f"  {_GOLD}+1 bonus trait (Starborn){_R}" if starborn else "")))
+        info.append(f"{_CYAN}Traits{_R} {_DIM}{tr or '—'}{_R}" + (f" {_GOLD}+1 Starborn trait{_R}" if starborn else ""))
+        _two_col(row_of_sprites([_def_spec(d, starborn)], width=40, raw=True), info)
         if existing is not None:
             where = "in your party" if existing in party.members else "on your bench"
             print(C(f"\n{_GREEN}{d['name']} already travels with you ({where}).{_R}"))
@@ -1672,7 +1717,7 @@ def _offer_screen(player, cid, cost=None, reason=None, starborn=None):
         opts.append(("T", "Chat"))
         opts.append(("0", "Leave"))
         print()
-        print(C("   ".join(f"{_GOLD}[{k}]{_R} {lbl}" for k, lbl in opts)))
+        _opts(opts)
         if msg:
             print(C(msg)); msg = ""
         ch = _ask(">").lower()
@@ -2002,12 +2047,15 @@ def recruit_menu(player, town_name=""):
     screen only (recruiting happens in taverns and out in the world)."""
     party = _party(player)
     in_town = bool(town_name)
+    try:
+        party.react_to_world(player)
+        party._check_departures(player)
+    except Exception:
+        pass
     while True:
         party.refresh(player)
         clr()
-        print(C(f"\n{_GOLD}{_B}╔════════════════════════════════════════╗{_R}"))
-        print(C(f"{_GOLD}{_B}║        ⚔  PARTY · ROSTER · CLAN  ⚔        ║{_R}"))
-        print(C(f"{_GOLD}{_B}╚════════════════════════════════════════╝{_R}"))
+        print(C(f"\n{_GOLD}{_B}══════════  PARTY · ROSTER · CLAN  ══════════{_R}"))
         if party.members:
             print()
             for ln in row_of_sprites([_spec_for(c) for c in party.members]):
@@ -2029,10 +2077,11 @@ def recruit_menu(player, town_name=""):
         if in_town:
             opts.append(("R", "Tavern board"))
         opts += [("P", "Manage party & bench"), ("C", "Customise companions"), ("K", "Clan"), ("0", "Back")]
-        print(C("   ".join(f"{_GOLD}[{k}]{_R} {lbl}" for k, lbl in opts)))
+        _opts(opts)
         if not in_town:
-            print(C(f"{_DIM}Recruit in town taverns — rare companions also wander the roads, sit in cells "
-                    f"of conquered dungeons and lurk in ruins.{_R}"))
+            for ln in _wrap("Recruit in town taverns. Rarer companions wander the roads, sit in the cells "
+                            "of conquered dungeons, lurk in ruins - and beaten foes sometimes ask to join.", 90):
+                print(C(f"{_DIM}{ln}{_R}"))
         ch = _ask(">").lower()
         if ch in ("0", "", "q"):
             return
@@ -2115,21 +2164,18 @@ def _companion_screen(player, c, can_swap):
         clr()
         active = c in party.members
         print(C(f"\n{_CYAN}{_B}════  {c.name.upper()}  ════{_R}  {_DIM}({'active' if active else 'bench'}){_R}\n"))
-        art = row_of_sprites([_spec_for(c)], width=40)
-        info = _detail_lines(c)
-        h = max(len(art), len(info))
-        for i in range(h):
-            left = art[i].strip() if i < len(art) else ""
-            pad = 24 - _vis(left)
-            print(C(left + " " * max(0, pad) + "  " + (info[i] if i < len(info) else "")))
-        print(C(f"{_DIM}{c.d.get('bio', '')}{_R}"))
+        _two_col(row_of_sprites([_spec_for(c)], width=40, raw=True), _detail_lines(c))
+        print()
+        for ln in _wrap(c.d.get("bio", ""), 90):
+            print(C(f"{_DIM}{ln}{_R}"))
         opts = [("T", "Talk"), ("G", "Give a gift"), ("E", "Equipment"), ("C", "Customise")]
         if active:
             opts.append(("B", "Send to bench"))
         elif can_swap:
             opts.append(("A", "Bring into party"))
         opts += [("X", "Part ways"), ("0", "Back")]
-        print(C("\n" + "   ".join(f"{_GOLD}[{k}]{_R} {lbl}" for k, lbl in opts)))
+        print()
+        _opts(opts)
         if msg:
             print(C(msg)); msg = ""
         ch = _ask(">").lower()
@@ -2311,7 +2357,7 @@ def _styles_for(c):
     """List of (style_dict, locked_reason_or_None)."""
     d = c.d
     out = [({"id": "signature", "label": "Signature", "desc": "Their own colours.",
-             "colour": tuple(d.get("accent", (220, 220, 220))), "crown": False}, None)]
+             "colour": tuple(d.get("accent", (220, 220, 220))), "crown": c.rarity == "legendary"}, None)]
     for s in COMPANION_STYLES.get(c.role, []):
         out.append((dict(s, crown=False), None))
     alt = d.get("alt", {})
@@ -2361,19 +2407,16 @@ def _customise_one(player, c):
         prev_acc = s["colour"]
         art = row_of_sprites([dict(sprite=c.sprite, accent=prev_acc, legendary=s.get("crown"),
                                    label=f"{_col_rgb(prev_acc)}{c.marker}{_R} {_B}{c.name}{_R}",
-                                   sub=f"{_DIM}{c.title}{_R}")], width=40)
+                                   sub=f"{_DIM}{c.title}{_R}")], width=40, raw=True)
         info = [f"{_DIM}{sel + 1}/{len(styles)}{_R}  {_col_rgb(prev_acc)}██{_R}  {_B}{s['label']}{_R}"
                 + (f"  {_RED}[LOCKED]{_R}" if locked else f"  {_GREEN}✓ wearing{_R}" if s["id"] == c.style.get("id") else ""),
                 ""] + [f"{_DIM}{ln}{_R}" for ln in _wrap(s.get("desc", ""), 36)]
         if locked:
             info += ["", f"{_ORAN}Unlock: {locked}{_R}"]
-        h = max(len(art), len(info))
-        for i in range(h):
-            left = art[i].strip() if i < len(art) else ""
-            print(C(left + " " * max(0, 24 - _vis(left)) + "  " + (info[i] if i < len(info) else "")))
+        _two_col(art, info, gap=4)
         print()
-        print(C(f"{_GOLD}[A]{_R}/{_GOLD}[D]{_R} browse  {_GOLD}[Enter]{_R} wear  {_GOLD}[K]{_R} custom RGB  "
-                f"{_GOLD}[N]{_R} rename  {_GOLD}[T]{_R} title  {_GOLD}[M]{_R} marker  {_GOLD}[E]{_R} gear  {_GOLD}[0]{_R} back"))
+        _opts([("A/D", "browse"), ("Enter", "wear"), ("K", "custom RGB"), ("N", "rename"),
+               ("T", "title"), ("M", "marker"), ("E", "gear"), ("0", "back")])
         if msg:
             print(C(msg)); msg = ""
         ch = _ask(">").lower()
@@ -2620,10 +2663,10 @@ def _clan_menu(player, can_swap=False):
         bench = _party(player).bench
         print(C(f"{_DIM}Hall bench: {len(bench)} companion(s){_R}\n"))
         opts = [("C", "Collect"), ("U", "Upgrade hall"), ("H", "Hall bench")]
-        if "Tavern" in clan.upgrades:
+        if "Tavern" in clan.upgrades and can_swap:
             opts.append(("V", "Guests at the hall tavern"))
         opts.append(("0", "Back"))
-        print(C("   ".join(f"{_GOLD}[{k}]{_R} {lbl}" for k, lbl in opts)))
+        _opts(opts)
         ch = _ask(">").lower()
         if ch in ("0", "", "q"):
             return
@@ -2646,8 +2689,8 @@ def _clan_menu(player, can_swap=False):
         elif ch == "u":
             _clan_upgrade_menu(player, clan)
         elif ch == "h":
-            party_menu(player, can_swap=True)
-        elif ch == "v" and "Tavern" in clan.upgrades:
+            party_menu(player, can_swap=can_swap)
+        elif ch == "v" and "Tavern" in clan.upgrades and can_swap:
             _hall_guests(player)
 
 

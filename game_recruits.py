@@ -906,8 +906,7 @@ def tavern_recruits(town_name, day, player=None):
         try:
             party = player.party
             have = {c.id for c in party.roster}
-            gone = set(getattr(party, "departed", {}) or {})
-            out = [c for c in out if c not in have and c not in gone]
+            out = [c for c in out if c not in have]
         except Exception:
             pass
     return out

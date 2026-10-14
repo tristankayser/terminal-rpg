@@ -676,12 +676,7 @@ class WorldMap:
         nearby_str = f"  {C_RED}⚠ {','.join(nearby_parts)}{R_}" if nearby_parts else ""
         story_str = ""
         if player and player.stories.get_main_step():
-            step  = player.stories.get_main_step()
-            story = player.stories.get_main_story()
-            col   = story["colour"] if story else C_GOLD
-            prog  = player.stories.main_progress
-            req   = step["required"]
-            story_str = f"  {col}★{step['title']}{R_} {C_DIM}[{prog}/{req}]{R_}"
+            story_str = player.stories.hud_text(player)
         out.append(C(f"{cont_col}{cont_name}{R_}  {C_DIM}{tname}{R_}"
                      f"{loc_str}{nearby_str}{story_str}"))
 
@@ -758,13 +753,9 @@ class WorldMap:
             tn={PLAINS:"Plains",FOREST:"Forest",MOUNTAIN:"Mountains",SNOW:"Snow",
                 HILL:"Hills",ROAD:"Road",RIVER:"River",SAND:"Beach"}.get(ter,"")
             self.last_msg=f"{C_DIM}Travelling through {ccol}{cn}{R_} {C_DIM}— {tn}.{R_}"
-            # Town visit story triggers
-            unlocked=player.stories.on_town_visit(cn,player)
-            if unlocked:
-                from game_stories import SIDE_STORIES
-                for sid in unlocked:
-                    s=SIDE_STORIES[sid]
-                    self.last_msg+=f"  {s['colour']}[New side story: {s['title']}!]{R_}"
+            # Flag / item / level story checks (this used to call
+            # on_town_visit with the CONTINENT name, which never matched)
+            self._handle_story_completions(player.stories.on_step(player))
 
         if self.turn_count % 25 == 0:
             self._respawn_enemies()
@@ -783,9 +774,10 @@ class WorldMap:
             self._random_encounter(player,ter,self.cont_map[ny][nx])
 
     def _handle_story_completions(self,completed):
-        from game_stories import show_story_completion
+        from game_stories import show_story_completion, flush_story_popups
         for stype,step in completed:
             show_story_completion(stype,step)
+        flush_story_popups()
 
     def _enemy_contact(self,map_enemy,player):
         # God potion immunity
@@ -952,6 +944,8 @@ class WorldMap:
 
         if loc["type"] in ENTER_HANDLERS:
             ENTER_HANDLERS[loc["type"]](self, player, loc, autosave)
+            from game_stories import flush_story_popups
+            flush_story_popups(player)    # story steps completed inside scenes
             return
 
         if loc["type"] in ("city","port"):

@@ -143,32 +143,19 @@ def _step_movement(name):
 # ── Step 4: Story selection ───────────────────────────────────────
 
 def _step_story(name):
-    """Ask for main story. Returns story_id, or raises _BackSignal."""
-    stories = list(MAIN_STORIES.items())
-    while True:
-        clear()
-        print(BANNER())
-        print(div())
-        print(C(f"\n{C_CYAN}{B_}══════  {name}  ──  Step 4 of 4: STORY  ══════{R_}\n"))
-        print(C(f"{C_DIM}Side stories will be discovered as you explore.{R_}\n"))
-        for i, (sid, s) in enumerate(stories, 1):
-            col = s["colour"]
-            print(C(f"{C_GOLD}{B_}[{i}]{R_} {col}{B_}{s['title']}{R_}"))
-            words = s["intro"].split()
-            line = "  "; lines = []
-            for w in words:
-                if len(line)+len(w)+1 > 72:
-                    lines.append(line); line = "  "+w+" "
-                else:
-                    line += w+" "
-            if line.strip(): lines.append(line)
-            for l in lines: print(C(f"{C_DIM}{l}{R_}"))
-            print()
-        print(back_opt())
-        ch = input(C(f"{C_GOLD}>{R_} Choose story (1-{len(stories)}): ")).strip()
-        if ch == "0": raise _BackSignal
-        if ch.isdigit() and 1 <= int(ch) <= len(stories):
-            return stories[int(ch)-1][0]
+    """Ask for main story. Returns story_id, or raises _BackSignal.
+    Handles any number of main stories (feature modules register more)."""
+    from game_stories import story_selection_screen
+
+    def _header():
+        if H() >= 44:
+            print(BANNER())
+            print(div())
+
+    sid = story_selection_screen(name=f"{name}  ──  Step 4 of 4", allow_back=True, header=_header)
+    if sid is None:
+        raise _BackSignal
+    return sid
 
 # ── Step 5: Summary ───────────────────────────────────────────────
 
@@ -179,6 +166,8 @@ def _step_summary(name, job_name, movement_mode, story_id):
     player.stories.start_main(story_id)
 
     _, col, _ = CLASS_INFO.get(job_name, ("", C_WHITE, ""))
+    from game_stories import ensure_external_stories
+    ensure_external_stories()
     story = MAIN_STORIES.get(story_id)
     clear()
     print(BANNER())

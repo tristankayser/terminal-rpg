@@ -632,7 +632,7 @@ class Scene:
             mp = mpbar(player.mp, player.max_mp, 8)
         except Exception:
             hp = mp = ""
-        cls = getattr(player, "char_class", "")
+        cls = getattr(getattr(player, "job", None), "name", "")
         extra = ""
         if self.hud_extra:
             try:

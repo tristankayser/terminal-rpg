@@ -866,3 +866,52 @@ def ask_inspect(entries, player=None, prompt_text="Inspect which #"):
     if ch.isdigit() and 1 <= int(ch) <= len(entries):
         return inspect_item(entries[int(ch) - 1], player)
     return ""
+
+
+# ═══════════════════════════════════════════════════════════════
+# LIST ROWS (shared by the town bag, quick bag and guild storage)
+# ═══════════════════════════════════════════════════════════════
+
+def entry_row(i, entry, name_w=26):
+    """'[ 3] † Name xN   detail' — slot and stats appear exactly once."""
+    from game_items import item_glyph
+    it = entry.item if isinstance(entry, ItemStack) else entry
+    qty = entry.qty if isinstance(entry, ItemStack) else 1
+    rcol = rarity_colour(getattr(it, "rarity", "common"))
+    name = it.name + (f" x{qty}" if qty > 1 else "")
+    if len(name) > name_w:
+        name = name[:name_w - 1] + "…"
+    if isinstance(it, Equipment):
+        detail = f"{C_DIM}[{it.slot}] {it.stat_line()}{R_}"
+    elif it.item_type == "key":
+        detail = f"{C_DIM}key item{R_}"
+    elif it.item_type == "material":
+        detail = f"{C_DIM}material{R_}"
+    else:
+        detail = f"{C_GREEN}{describe_effect(it)}{R_}"
+    return f"{C_GOLD}{B_}[{i:>2}]{R_} {item_glyph(it)} {rcol}{name:<{name_w}}{R_} {detail}"
+
+
+def worn_row(slot, item, name_w=26):
+    from game_items import item_glyph
+    name = item.name if len(item.name) <= name_w else item.name[:name_w - 1] + "…"
+    return (f"  {C_DIM}{slot:<7}{R_} {item_glyph(item)} {item.rarity_col()}{name:<{name_w}}{R_} "
+            f"{C_DIM}{item.stat_line()}{R_}")
+
+
+def print_columns(rows, min_rows=12, gap=4):
+    """Print rows centred; use two columns when the list is long and the
+    terminal is wide enough (iPad 200 cols), otherwise one column."""
+    if not rows:
+        return
+    widest = max(_vis(r) for r in rows)
+    from game_term import _pad
+    if len(rows) > min_rows and _pad() + 2 * widest + gap <= W():
+        half = (len(rows) + 1) // 2
+        for a in range(half):
+            left = rows[a]
+            right = rows[a + half] if a + half < len(rows) else ""
+            print(C(left + " " * (widest - _vis(left) + gap) + right))
+    else:
+        for r in rows:
+            print(C(r))

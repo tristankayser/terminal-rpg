@@ -897,23 +897,34 @@ def quick_inventory(player):
         print(C(f"\n{_CYAN}{_B}════  QUICK BAG  ════{_R}  "
                 f"{_DIM}HP {player.hp}/{player.max_hp}  MP {player.mp}/{player.max_mp}  "
                 f"Gold {player.gold}  ({len(player.inventory)}/{INVENTORY_LIMIT} slots){_R}\n"))
+        from game_icons import entry_row, print_columns, parse_inspect, inspect_item
         if not player.inventory:
             print(C(f"{_DIM}Your bag is empty.{_R}"))
-        for i, it in enumerate(player.inventory, 1):
-            if isinstance(it, Equipment):
-                col = it.rarity_col(); extra = f"{_DIM}[{it.slot}] {it.stat_line()}{_R}"
-            else:
-                col = (_GREEN if it.item_type == "heal" else _BLUE if it.item_type == "mana"
-                       else _GOLD if it.item_type == "god" else _DIM if it.item_type == "material"
-                       else _WHITE)
-                extra = f"{_DIM}{Player.describe_consumable(it) or it.item_type}{_R}"
-            print(C(f"{_GOLD}[{i:>2}]{_R} {col}{str(it):<26}{_R} {extra}"))
-        print(C(f"\n{_DIM}Type a number to use/equip that item.{_R}"))
+        else:
+            # Name, slot and stats once each (Equipment.__repr__ already holds
+            # slot+stats, so printing str(it) plus the stats duplicated them)
+            print_columns([entry_row(i, it) for i, it in enumerate(player.inventory, 1)])
+        print(C(f"\n{_DIM}Type a number to use/equip that item, or ?3 / x3 to inspect it.{_R}"))
         print(C(f"{_GOLD}[U]{_R}{_DIM} Use item  {_R}{_GOLD}[E]{_R}{_DIM} Equip  {_R}"
-                f"{_GOLD}[R]{_R}{_DIM} Unequip  {_R}{_GOLD}[0]{_R}{_DIM} Close{_R}"))
+                f"{_GOLD}[R]{_R}{_DIM} Unequip  {_R}{_GOLD}[X]{_R}{_DIM} Inspect  {_R}"
+                f"{_GOLD}[0]{_R}{_DIM} Close{_R}"))
         ch = input(C(f"\n{_GOLD}>{_R} ")).strip().lower()
         if ch in ("0", "q", ""):
             return
+        n = parse_inspect(ch, len(player.inventory))
+        if n is None and ch in ("x", "?"):
+            q = input(C(f"{_GOLD}Inspect # >{_R} ")).strip()
+            n = int(q) if q.isdigit() and 1 <= int(q) <= len(player.inventory) else None
+            if n is None:
+                continue
+        if n is not None:
+            it = player.inventory[n - 1]
+            key = inspect_item(it, player, f"{_GOLD}[E]{_R}{_DIM} Equip{_R}" if isinstance(it, Equipment) else "")
+            if key == "e" and isinstance(it, Equipment):
+                ok, msg = player.equip(it)
+                print(C(f"{_GREEN if ok else _RED}{msg}{_R}"))
+                input(C(f"{_DIM}(Press Enter){_R}"))
+            continue
         if ch == "u":
             player.use_inventory_item()
         elif ch == "e":

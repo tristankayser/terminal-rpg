@@ -977,7 +977,7 @@ CITY_PAL = {
     ".": _T((118, 118, 128), "·", True, "cobbles"),
     ":": _T((200, 200, 215), "·", True, "marble"),
     "h": _T((40, 110, 55), "▒", False, "hedge"),
-    "f": _T((205, 150, 255), "*", False, "moon lilies"),
+    "f": _T((205, 150, 255), "*", True, "moon lilies"),
     "e": _T((190, 190, 205), "▒", True, "bridge"),
     "~": _T((60, 105, 205), "≈", False, "canal"),
     "g": _T((95, 95, 105), "▒", False, "water gate"),
@@ -1201,10 +1201,10 @@ class Valdmere:
         # roof signs
         for (x, y, text, col) in (
                 (6, 8, "ROYAL ACADEMY", C_LILAC), (7, 9, "OF THE ARCANE", C_LILAC),
-                (26, 6, "STARFALL", fg(220, 180, 255)),
+                (28, 7, "STAR", fg(220, 180, 255)), (28, 9, "FALL", fg(220, 180, 255)),
                 (6, 17, "TEMPLE OF THE MOON", fg(225, 230, 255)),
                 (97, 17, "ROYAL BARRACKS", C_MARBLE),
-                (5, 25, "ROYAL EMPORIUM", C_GOLD), (24, 25, "SMITHY", fg(255, 160, 80)),
+                (4, 25, "ROYAL EMPORIUM", C_GOLD), (24, 25, "SMITHY", fg(255, 160, 80)),
                 (76, 25, "THE SILVER STAG", fg(220, 220, 240)),
                 (99, 25, "ADVENTURERS' GUILD", C_GOLD),
                 (88, 8, "HOUSE VALCREST", C_DIM), (105, 8, "HOUSE ORLAINE", C_DIM),
@@ -1267,7 +1267,7 @@ class Valdmere:
                               (22, 29, "Silk Merchant", "Purple silk, the royal shade. Don't wear it to court unless invited."),
                               (35, 29, "Fruit Seller", "Apples from the royal orchards! Well, near them.")):
             sc.add_entity(Entity(x, y, "@", merch, n, title="market", lines=[ln, "Buy something or move along, love."]))
-        sc.add_entity(Entity(60, 18, "@", fg(120, 200, 120), "Gardener Tamsin", npc_id="gardener_tamsin",
+        sc.add_entity(Entity(46, 18, "@", fg(120, 200, 120), "Gardener Tamsin", npc_id="gardener_tamsin",
                              title="Royal Gardens", ai="wander", radius=1,
                              lines=["The moon lilies only open for the Queen. Or so we tell the tourists.",
                                     "Please keep off the hedges. They bite. Not literally. Mostly."]))

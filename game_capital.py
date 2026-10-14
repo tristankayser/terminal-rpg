@@ -315,14 +315,22 @@ def wait_key():
             return "\x1b"
 
 
+def _centre(text):
+    """Truly centre one line (game_term.C only adds a fixed left margin)."""
+    return " " * max(0, (W() - _vis(text)) // 2) + text
+
+
 def show_banner(art, title_lines, colours, subtitle="", note=""):
-    """Full-screen title card: art lines (keys→colour via `colours`
-    callable(ch,x,y)->ansi or plain str colour) + caption.  Waits for a key."""
+    """Full-screen title card: art lines coloured per character by
+    `colours(ch, x, y)` (or one colour string), a caption and an optional
+    note.  Waits for a key."""
     rows = H()
     out = []
-    pad_top = max(0, (rows - len(art) - len(title_lines) - 6) // 2)
+    width = max((len(a) for a in art), default=0)
+    pad_top = max(0, (rows - len(art) - len(title_lines) - 8) // 2)
     out.extend([""] * pad_top)
-    for y, line in enumerate(art):
+    left = " " * max(0, (W() - width) // 2)
+    for y, line in enumerate(a.ljust(width) for a in art):
         if callable(colours):
             seg, last = [], None
             for x, ch in enumerate(line):
@@ -331,20 +339,20 @@ def show_banner(art, title_lines, colours, subtitle="", note=""):
                     seg.append(R_ + col)
                     last = col
                 seg.append(ch)
-            out.append(C("".join(seg) + R_))
+            out.append(left + "".join(seg) + R_)
         else:
-            out.append(C(f"{colours}{line}{R_}"))
+            out.append(left + f"{colours}{line}{R_}")
     out.append("")
     for t in title_lines:
-        out.append(C(t))
+        out.append(_centre(t))
     if subtitle:
-        out.append(C(f"{C_DIM}{subtitle}{R_}"))
+        out.append(_centre(f"{C_DIM}{subtitle}{R_}"))
     if note:
         out.append("")
         for chunk in _wrap(note, 70):
-            out.append(C(f"{C_WHITE}{chunk}{R_}"))
+            out.append(_centre(f"{C_WHITE}{chunk}{R_}"))
     out.append("")
-    out.append(C(f"{C_DIM}(press any key){R_}"))
+    out.append(_centre(f"{C_DIM}(press any key){R_}"))
     clr()
     draw_frame(out)
     wait_key()
@@ -1135,6 +1143,7 @@ class Valdmere:
     def run(self):
         player = self.player
         valdmere_banner(player)
+        show_completions(check_flags(player), None, self.world)
         nxt, entry = "city", "gate"
         result = "left"
         while True:

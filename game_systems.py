@@ -90,7 +90,60 @@ def _capture(log, fn, *args, **kwargs):
     return result
 
 
-def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note=""):
+def _flush_notes(log, *enemies):
+    """Move weakness / break / immunity notes from enemies into the log."""
+    for e in enemies:
+        if e is not None and hasattr(e, "pop_notes"):
+            log.extend(e.pop_notes())
+
+
+def _adds_of(enemy):
+    return enemy.alive_adds() if hasattr(enemy, "alive_adds") else []
+
+
+def _retarget(enemy, target):
+    """Keep the player's target valid. New adds grab the target (they are the
+    threat to deal with first); when an add dies, the next add or the boss
+    becomes the target."""
+    adds = _adds_of(enemy)
+    if getattr(enemy, "just_summoned", False):
+        enemy.just_summoned = False
+        if adds:
+            return adds[-1]
+    if target is enemy:
+        return enemy
+    if target is None or not target.is_alive() or target not in adds:
+        return adds[0] if adds else enemy
+    return target
+
+
+def _boss_header_lines(player, enemy, adds, target):
+    """Extra rows for a boss fight: phase / shield / weakness / enrage, intent, adds."""
+    from game_enemies import TYPE_COLOUR
+    bits = []
+    ph = getattr(enemy, "phase", 1)
+    bits.append(f"{fg(*enemy.colour)}{B}PHASE {ph}{R}")
+    sh = enemy.shield_text()
+    if sh:
+        bits.append(sh)
+    wk = enemy.weak_text()
+    if wk:
+        bits.append(f"{C_DIM}{wk}{R}")
+    en = enemy.enrage_text()
+    if en:
+        bits.append(en)
+    lines = [f"{C_DIM}  ·  {R}".join(bits)]
+    it = enemy.intent_text(player)
+    if it:
+        lines.append(f"{C_DIM}INTENT ▶{R} {it}")
+    for a in adds:
+        mark = f"  {C_GOLD}{B}◀ TARGET{R}" if a is target else ""
+        eff = (" " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in a.status_effects)) if a.status_effects else ""
+        lines.append(f"{C_ORANGE}↳ {a.name[:14]:<14}{R} HP {hp_bar(a.hp, a.max_hp, 12)}{eff}{mark}")
+    return lines
+
+
+def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="", target=None):
     clear()
     title = f"  ⚔  {'BOSS BATTLE' if is_boss else 'BATTLE'} · {enemy.name} · Round {rnd}  "
     bw = max(len(title) + 8, 56)
@@ -99,30 +152,46 @@ def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="
     print()
     print(C(f"{tcol}{B}{'═'*side}{title}{'═'*(bw - side - len(title))}{R}"))
 
-    # Sprites only when there is room for them
+    adds = _adds_of(enemy) if is_boss else []
+    boss_lines = _boss_header_lines(player, enemy, adds, target) if is_boss else []
+    has_team = bool(player.party.members)
+
+    # Fit everything into the terminal: sprites only when there is room
     rows = H()
-    log_n = 8 if rows >= 44 else 6 if rows >= 36 else 5
-    if rows >= 32:
-        from game_art import player_look
-        acc, leg = player_look(player)
+    fixed = 13 + len(boss_lines) + (1 if has_team else 0) + (1 if note else 0)
+    from game_art import player_look
+    acc, leg = player_look(player)
+    art = side_by_side(player.job.name, getattr(enemy, "sprite", enemy.name),
+                       gap=10, left_accent=acc, left_legendary=leg)
+    avail = rows - fixed
+    if avail >= len(art) + 1 + 4:
+        log_n = max(4, min(8, avail - len(art) - 1))
         print()
-        for art_line in side_by_side(player.job.name, enemy.name,
-                                     player.name, enemy.name, gap=10,
-                                     left_accent=acc, left_legendary=leg):
+        for art_line in art:
             print(art_line)
+    else:
+        log_n = max(3, min(8, avail))
     print()
 
     eff_str = ("  " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in enemy.status_effects)) if enemy.status_effects else ""
-    phase = f"  {C_ORANGE}{B}⚡PHASE 2{R}" if getattr(enemy, "phase", 1) == 2 else ""
-    print(C(f"{C_RED}{B}FOE {R} {C_RED}{enemy.name[:16]:<16}{R} HP {hp_bar(enemy.hp, enemy.max_hp)}{eff_str}{phase}"))
+    tmark = f"  {C_GOLD}{B}◀ TARGET{R}" if adds and target is enemy else ""
+    phase = ""
+    if not is_boss and getattr(enemy, "phase", 1) >= 2:
+        phase = f"  {C_ORANGE}{B}⚡PHASE {enemy.phase}{R}"
+    print(C(f"{C_RED}{B}FOE {R} {C_RED}{enemy.name[:16]:<16}{R} HP {hp_bar(enemy.hp, enemy.max_hp)}{eff_str}{phase}{tmark}"))
+    for ln in boss_lines:
+        print(C(ln))
     p_eff = ("  " + " ".join(f"{C_PURPLE}[{e}]{R}" for e in player.status_effects)) if player.status_effects else ""
     buff  = (f"  {C_ORANGE}[ATK+{player.temp_atk_buff} {player.temp_atk_turns}t]{R}"
              if getattr(player, "temp_atk_turns", 0) > 0 else "")
     hero = f"{player.name[:10]} Lv{player.level}"
     print(C(f"{C_GREEN}{B}YOU {R} {C_WHITE}{B}{hero:<16}{R} HP {hp_bar(player.hp, player.max_hp)}"
             f"  MP {mp_bar(player.mp, player.max_mp)}{p_eff}{buff}"))
-    if player.party.members:
-        mates = "  ".join(f"{m._col()}{m.name}{R} {C_DIM}{m.hp}/{m.max_hp}{R}" for m in player.party.members)
+    if has_team:
+        mates = "  ".join(
+            (f"{m._col() if hasattr(m, '_col') else C_WHITE}{m.name}{R} {C_DIM}{m.hp}/{m.max_hp}{R}"
+             if m.is_alive() else f"{C_DIM}{m.name} (down){R}")
+            for m in player.party.members)
         print(C(f"{C_CYAN}{B}TEAM{R}  {mates}"))
 
     # Combat log — the last few things that happened
@@ -137,15 +206,19 @@ def _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note="
     if stunned:
         print(C(f"{C_YELLOW}⚡ {T('combat.stunned')}{R}"))
     else:
+        tgt = f"   {menu_opt('T', 'Target', 'switch')}" if adds else ""
         print(C(f"{menu_opt('1', T('combat.attack'), 'Basic weapon strike')}   "
-                f"{menu_opt('2', T('combat.skill'), 'Class skill (MP)')}"))
+                f"{menu_opt('2', T('combat.skill'), 'Class skill (MP)')}{tgt}"))
         print(C(f"{menu_opt('3', T('combat.item'), 'Potion, bomb, buff')}   "
                 f"{menu_opt('4', T('combat.defend'), 'Brace, take less damage')}"
                 + (f"   {menu_opt('5', T('combat.run'), 'Attempt to flee')}" if allow_escape else "")))
 
 
-def _choose_skill(player):
-    """Skill picker. Returns a Skill or None."""
+def _choose_skill(player, target=None):
+    """Skill picker. Returns a Skill or None.  Shows each skill's damage type
+    and flags the ones the current target is weak to."""
+    from game_enemies import skill_damage_type, TYPE_COLOUR
+    weak = getattr(target, "weak", set()) or set()
     clear()
     print(section("SKILLS"))
     print(C(f"{C_DIM}MP {player.mp}/{player.max_mp} — if MP is short, the rest is paid with HP.{R}\n"))
@@ -154,7 +227,13 @@ def _choose_skill(player):
         base   = (f"DMG {sk.damage}" if sk.damage else f"HEAL {sk.heal}" if sk.heal
                   else "BUFF")
         fx     = f" +{sk.status_effect.name}({sk.status_chance}%)" if sk.status_effect else ""
-        print(C(f"{menu_opt(i, sk.name, f'{base}{fx}')}  {enough}MP:{sk.mana_cost}{R}"))
+        typ = ""
+        if sk.damage:
+            t = skill_damage_type(sk, player)
+            typ = f" {TYPE_COLOUR.get(t, '')}{t}{R}"
+            if t in weak:
+                typ += f" {C_GOLD}{B}WEAK!{R}"
+        print(C(f"{menu_opt(i, sk.name, f'{base}{fx}')}{typ}  {enough}MP:{sk.mana_cost}{R}"))
         if sk.description:
             print(C(f"     {C_DIM}{sk.description}{R}"))
     print(C(f"\n{menu_opt(0, 'Cancel')}"))
@@ -177,30 +256,56 @@ def _throw_bomb(player, enemy, idx, allow_escape, log):
         return "escaped"
     remove_items(player.inventory, it.name, 1)
     dmg = it.value + player.level * 3 + random.randint(0, 10)
+    enemy._incoming = ("fire", "bomb")
     dealt = enemy.take_damage(dmg)
+    enemy._incoming = None
     log.append(f"{C_ORANGE}{B}BOOM!{R} {it.name} hits {enemy.name} for {dealt} damage!")
-    if random.randint(1, 100) <= 40:
+    if random.randint(1, 100) <= 40 and enemy.is_alive():
         from game_items import Burn
-        enemy.add_status(Burn(duration=2, damage=5 + player.level))
-        log.append(f"{C_ORANGE}{enemy.name} is set ablaze!{R}")
+        _capture(log, enemy.add_status, Burn(duration=2, damage=5 + player.level))
+        if any(e.name == "Burn" for e in enemy.status_effects):
+            log.append(f"{C_ORANGE}{enemy.name} is set ablaze!{R}")
     return "used"
 
 
+def _blind_miss(player, chance):
+    if any(e.name == "Blind" for e in player.status_effects):
+        return random.randint(1, 100) <= chance
+    return False
+
+
 def run_combat(player, enemy, allow_escape=True, first_strike=False):
-    from game_enemies import BossEnemy
+    from game_enemies import (BossEnemy, Blind, skill_damage_type, companion_damage_type,
+                              pick_target, COMBAT_ONLY_STATUSES)
     from game_items import use_entry
     is_boss = isinstance(enemy, BossEnemy)
+    if is_boss:
+        enemy.prepare(player)
     base_defense = player.defense
     log = []
     used_potion = False
     player._damage_this_battle = 0
+    target = enemy
+
+    if is_boss:
+        title = f" {C_DIM}— {enemy.title}{R}" if enemy.title else ""
+        log.append(f"{fg(*enemy.colour)}{B}{enemy.name}{R}{title}")
+        intro = enemy.kit.get("intro")
+        if intro:
+            log.append(f"{C_YELLOW}{intro}{R}")
+        if enemy.difficulty != "normal":
+            log.append(f"{C_DIM}Difficulty: {enemy.difficulty.title()}{R}")
 
     # ── Sneak attack on first round ──────────────────────────
     if first_strike and player.in_stealth:
         base = max(1, player.combat_atk() + random.randint(0, 3))
         dmg = _capture(log, player.stealth_first_strike, base)
+        enemy._incoming = ("physical", "sneak")
         dealt = enemy.take_damage(dmg)
         log.append(f"{C_PURPLE}{B}★ {T('combat.sneak_attack')} {enemy.name} → {dealt} damage!{R}")
+        _flush_notes(log, enemy)
+        if is_boss:
+            log.extend(enemy.check_phase())
 
     rnd = 0
     while enemy.is_alive() and player.is_alive():
@@ -214,41 +319,68 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
                 break
         stunned = any(e.name == "Stun" for e in player.status_effects)
 
+        target = _retarget(enemy, target)
+        if is_boss:
+            enemy.plan(player)                 # reveal this round's intent
+
         # ── Player picks an action (invalid input / cancel = pick again) ──
         note = ""
         fled = False
+        defending = False
         while True:
-            _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note)
+            _draw_combat(player, enemy, is_boss, log, allow_escape, stunned, rnd, note, target)
             note = ""
             if stunned:
                 input(C(f"{C_DIM}(Press Enter){R}"))
                 log.append(f"{C_YELLOW}You are stunned and lose your turn!{R}")
                 break
-            action = prompt("Choose action")
+            action = prompt("Choose action").lower()
+
+            if action == "t":
+                choices = [enemy] + _adds_of(enemy)
+                if len(choices) > 1:
+                    i = choices.index(target) if target in choices else 0
+                    target = choices[(i + 1) % len(choices)]
+                else:
+                    note = f"{C_DIM}There is only one foe to target.{R}"
+                continue
 
             if action == "1":
-                if enemy.try_dodge():
-                    log.append(f"{C_DIM}{T('combat.dodged', name=enemy.name)}{R}")
+                if _blind_miss(player, Blind.MISS):
+                    log.append(f"{C_YELLOW}Blinded, your swing cuts only air!{R}")
+                elif target.try_dodge():
+                    log.append(f"{C_DIM}{T('combat.dodged', name=target.name)}{R}")
                 else:
                     base = max(1, player.combat_atk() + random.randint(-2, 3))
                     crit, dmg = player.calc_crit(base)
-                    dealt = enemy.take_damage(dmg)
+                    target._incoming = ("physical", "attack")
+                    dealt = target.take_damage(dmg)
                     tag = f" {C_ORANGE}{B}CRITICAL!{R}" if crit else ""
                     if crit:
                         from game_customise import tick_legendary_quest as _tlq
                         _capture(log, _tlq, player, "crit_hit")
-                    log.append(f"{C_WHITE}{T('combat.you_strike', crit=tag, dmg=dealt)}{R}")
+                    msg = T('combat.you_strike', crit=tag, dmg=dealt)
+                    if target is not enemy:
+                        msg += f" {C_DIM}({target.name}){R}"
+                    log.append(f"{C_WHITE}{msg}{R}")
                 break
 
             elif action == "2":
                 if not player.skills:
                     note = f"{C_DIM}You have no skills yet.{R}"; continue
-                sk = _choose_skill(player)
+                sk = _choose_skill(player, target)
                 if sk is None:
                     continue
                 if not sk.can_use(player):
                     note = f"{C_RED}Not enough MP or HP to cast {sk.name}.{R}"; continue
-                ok = _capture(log, sk.use, player, enemy if sk.damage > 0 else None)
+                if sk.damage > 0 and _blind_miss(player, Blind.MISS // 2):
+                    _capture(log, sk.pay_cost, player)
+                    log.append(f"{C_YELLOW}Blinded, your {sk.name} goes wide!{R}")
+                    break
+                if sk.damage > 0:
+                    target._incoming = (skill_damage_type(sk, player), "skill")
+                ok = _capture(log, sk.use, player, target if sk.damage > 0 else None)
+                target._incoming = None
                 if not ok:
                     continue
                 from game_customise import tick_legendary_quest
@@ -263,7 +395,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
                     continue
                 it = player.inventory[idx]
                 if it.item_type == "bomb":
-                    res = _throw_bomb(player, enemy, idx, allow_escape, log)
+                    res = _throw_bomb(player, target, idx, allow_escape, log)
                     if res is None:
                         continue
                     if res == "escaped":
@@ -277,6 +409,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
 
             elif action == "4":
                 _capture(log, player.defend)
+                defending = True
                 break
 
             elif action == "5" and allow_escape:
@@ -291,31 +424,84 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
             else:
                 note = f"{C_RED}Invalid choice — pick one of the numbers below.{R}"
 
+        # ── Aftermath of the hero's action ──
+        _flush_notes(log, enemy, *getattr(enemy, "adds", []))
+        if is_boss:
+            _capture(log, enemy.resolve_counters, player)
+            log.extend(enemy.check_phase())
+        _report_fallen(log, enemy)
+
         if fled:
             player.defense = base_defense
             player.temp_atk_buff = player.temp_atk_turns = 0
-            _draw_combat(player, enemy, is_boss, log, allow_escape, False, rnd)
+            _end_of_battle_cleanup(player, COMBAT_ONLY_STATUSES)
+            _draw_combat(player, enemy, is_boss, log, allow_escape, False, rnd, "", target)
             input(C(f"{C_DIM}(Press Enter){R}"))
             return "escaped"
+
+        if not player.is_alive():
+            if not _capture(log, player.check_god_potion):
+                break
 
         _capture(log, player.process_status_end)
         _capture(log, player.tick_buffs)
 
-        # ── Party members act ──
-        if enemy.is_alive() and player.party.alive_members():
-            for companion in player.party.alive_members():
-                if not enemy.is_alive(): break
-                _capture(log, companion.combat_action, player, enemy, player.party.members)
+        # ── Party members act (they follow the hero's target) ──
+        mates_alive = player.party.alive_members()
+        if enemy.is_alive() and mates_alive:
+            for companion in mates_alive:
+                if not enemy.is_alive():
+                    break
+                target = _retarget(enemy, target)
+                tgt = target if target.is_alive() else enemy
+                tgt._incoming = (companion_damage_type(companion), "companion")
+                tgt._dodge_next = True
+                try:
+                    _capture(log, companion.combat_action, player, tgt, player.party.members)
+                finally:
+                    tgt._incoming = None
+                    tgt._dodge_next = False
+                _flush_notes(log, enemy, *getattr(enemy, "adds", []))
+            if is_boss:
+                log.extend(enemy.check_phase())
+            _report_fallen(log, enemy)
+        target = _retarget(enemy, target)
+
+        # ── Boss minions act ──
+        if is_boss and enemy.is_alive():
+            for a in _adds_of(enemy):
+                _capture(log, a.process_status_start)
+                if a.is_alive():
+                    if a.is_stunned():
+                        log.append(f"{C_DIM}{a.name} is stunned.{R}")
+                    else:
+                        _capture(log, a.basic_attack,
+                                 pick_target(player, player.party.alive_members()))
+                _capture(log, a.process_status_end)
+            _report_fallen(log, enemy)
 
         # ── Enemy turn ──
-        if enemy.is_alive():
+        alive_before = [m for m in player.party.members if m.is_alive()]
+        if enemy.is_alive() and player.is_alive():
             _capture(log, enemy.process_status_start)
+            if is_boss:
+                log.extend(enemy.check_phase())
             if enemy.is_alive():
                 if is_boss:
-                    _capture(log, enemy.use_boss_skill, player)
+                    _capture(log, enemy.act, player, player.party.alive_members(),
+                             defending, base_defense)
+                elif enemy.is_stunned():
+                    log.append(f"{C_YELLOW}{enemy.name} is stunned and can't act!{R}")
                 else:
-                    _capture(log, enemy.basic_attack, player)
+                    _capture(log, enemy.basic_attack,
+                             pick_target(player, player.party.alive_members()))
             _capture(log, enemy.process_status_end)
+            if is_boss:
+                enemy.player_defended_last = defending
+                log.extend(enemy.check_phase())
+        for m in alive_before:
+            if not m.is_alive():
+                log.append(f"{C_RED}{m.name} is knocked out!{R}")
 
         if not player.is_alive():
             if not _capture(log, player.check_god_potion):
@@ -326,6 +512,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
     player.defense = base_defense
     # Potion ATK buffs last for this battle only (they used to carry over)
     player.temp_atk_buff = player.temp_atk_turns = 0
+    _end_of_battle_cleanup(player, COMBAT_ONLY_STATUSES)
 
     # ── Result ──
     clear()
@@ -333,7 +520,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
         for ln in log[-6:]:
             print(C(ln))
         print()
-        print_sprite(enemy.name, label=f"✖  DEFEATED  ✖")
+        print_sprite(getattr(enemy, "sprite", enemy.name), label=f"✖  DEFEATED  ✖")
         print(C(f"\n{C_RED}{B}╔══════════════════════╗"))
         print(C(f"║   ✖  DEFEATED        ║"))
         print(C(f"╚══════════════════════╝{R}\n"))
@@ -347,6 +534,8 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
     print(C(f"\n{C_GREEN}{B}╔══════════════════════════════╗"))
     print(C(f"║   ★  VICTORY!                ║"))
     print(C(f"╚══════════════════════════════╝{R}\n"))
+    if is_boss and enemy.kit.get("last_words"):
+        print(C(f"{C_DIM}{enemy.kit['last_words']}{R}\n"))
     completed = award_victory(player, enemy, used_potion)
     input(C(f"\n{C_DIM}(Press Enter){R}"))
     if completed:
@@ -354,6 +543,52 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
         for stype, step in completed:
             show_story_completion(stype, step)
     return "victory"
+
+
+def _report_fallen(log, enemy):
+    """Log minions that died since the last check (once each)."""
+    for a in getattr(enemy, "adds", []) or []:
+        if not a.is_alive() and not getattr(a, "_reported", False):
+            a._reported = True
+            log.append(f"{C_GREEN}{a.name} falls!{R}")
+
+
+def _end_of_battle_cleanup(player, combat_only):
+    """Blindness and bleeding end with the battle (for hero and companions)."""
+    for who in [player] + list(getattr(player.party, "members", []) or []):
+        effs = getattr(who, "status_effects", None)
+        if isinstance(effs, list):
+            effs[:] = [e for e in effs if e.name not in combat_only]
+
+
+def _boss_bonus_loot(player):
+    """Guaranteed rare-or-better drop for a boss kill."""
+    item = None
+    try:
+        from game_items import random_loot
+        item = random_loot(player.level, rarity="rare")
+    except Exception:
+        item = None
+    if item is None:
+        try:
+            from game_items import ITEM_POOL, Equipment
+            cls = player.job.name
+            pool = []
+            for fac in ITEM_POOL.values():
+                try:
+                    it = fac()
+                except Exception:
+                    continue
+                if isinstance(it, Equipment) and getattr(it, "rarity", "") in ("rare", "legendary") \
+                        and (not it.allowed_classes or cls in it.allowed_classes):
+                    pool.append(it)
+            if pool:
+                legend = [i for i in pool if i.rarity == "legendary"]
+                item = random.choice(legend) if legend and random.randint(1, 100) <= 15 \
+                    else random.choice([i for i in pool if i.rarity == "rare"] or pool)
+        except Exception:
+            item = None
+    return item
 
 
 def award_victory(player, enemy, used_potion=False):
@@ -366,6 +601,11 @@ def award_victory(player, enemy, used_potion=False):
     gold = enemy.gold_reward + getattr(player, "_gold_bonus_kill", 0)
     print(C(f"{C_GOLD}{T('combat.gold_exp', gold=gold, exp=enemy.exp_reward)}{R}"))
     player.gold += gold
+    stolen = getattr(enemy, "stolen_gold", 0)
+    if stolen:
+        player.gold += stolen
+        enemy.stolen_gold = 0
+        print(C(f"{C_GOLD}You recover {stolen} stolen gold!{R}"))
     player.gain_exp(enemy.exp_reward)
     player.update_quests_on_kill(enemy.name)
 
@@ -385,11 +625,17 @@ def award_victory(player, enemy, used_potion=False):
                 break
 
     drops = roll_drops(enemy.name)
+    if is_boss:
+        bonus = _boss_bonus_loot(player)
+        if bonus is not None:
+            drops = list(drops or []) + [bonus]
     if drops:
         print(C(f"\n{C_YELLOW}Loot dropped:{R}"))
         for item in drops:
             if player.add_item(item):
                 print(C(f"  {C_WHITE}→ {item}{R}"))
+            else:
+                print(C(f"  {C_DIM}→ {item} (no room — left behind){R}"))
     else:
         print(C(f"\n{C_DIM}{T('combat.no_drops')}{R}"))
 

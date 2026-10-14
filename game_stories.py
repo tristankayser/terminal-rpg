@@ -209,6 +209,22 @@ def _step_pairs(step):
     return pairs
 
 
+def _with_option(step, opt):
+    """A copy of a choice step carrying the chosen option's text/rewards."""
+    s = dict(step)
+    s["chosen"] = opt.get("key")
+    s["chosen_label"] = opt.get("label", opt.get("key"))
+    if opt.get("text"):
+        s["completion_text"] = opt["text"]
+    for k in ("reward_gold", "reward_exp"):
+        if opt.get(k):
+            s[k] = (s.get(k, 0) or 0) + opt[k]
+    for k in ("reward_items", "set_flags", "unlock_side"):
+        if opt.get(k):
+            s[k] = list(s.get(k, []) or []) + list(opt[k])
+    return s
+
+
 def _make_item(name):
     try:
         from game_items import make_item
@@ -275,6 +291,7 @@ class StoryManager:
         self.choices = {}            # "story:step" -> option key
         self.log = []                # ["story:step", ...] completed, in order
         self.epilogues_seen = []
+        self.slain = []              # distinct enemy names ever defeated (retro kill steps)
         self._last_talk = None       # (npc_id, step) — for npc_dialogue
         self._in_dialogue = False
 
@@ -399,7 +416,8 @@ class StoryManager:
     def _advance(self, kind, sid, story, st, player):
         steps = story["steps"]
         i = st.get("step_idx", 0) + 1
-        while i < len(steps) and self._skipped(steps[i], player):
+        while i < len(steps) and (self._skipped(steps[i], player)
+                                  or f"{sid}:{steps[i]['id']}" in self.log):
             i += 1
         if i >= len(steps):
             st["complete"] = True
@@ -498,6 +516,8 @@ class StoryManager:
         """Call after every kill. Returns list of (kind, step) completed."""
         if enemy_name == "Bandit":
             self.bandit_kill_count += 1
+        if enemy_name and enemy_name not in self.slain and len(self.slain) < 500:
+            self.slain.append(enemy_name)
         self._check_unlocks(player)
         return self._event("kill", enemy_name, player)
 
@@ -534,7 +554,9 @@ class StoryManager:
                     continue
                 t = step["type"]
                 ok = False
-                if t == "flag":
+                if t == "kill" and step.get("retro"):
+                    ok = any(n in self.slain for n in _as_list(step.get("target")))
+                elif t == "flag":
                     names = _as_list(step.get("target"))
                     have = sum(1 for f in names if flags.get(f))
                     st["progress"] = min(have, step.get("required", 1)) if len(names) > 1 else (1 if have else 0)
@@ -543,6 +565,7 @@ class StoryManager:
                     for opt in step.get("options", []):
                         if opt.get("flag") and flags.get(opt["flag"]):
                             self.choices[f"{sid}:{step['id']}"] = opt.get("key", opt["flag"])
+                            step = _with_option(step, opt)
                             ok = True
                             break
                 elif t == "item":
@@ -728,6 +751,7 @@ class StoryManager:
             "choices":          dict(self.choices),
             "log":              list(self.log),
             "epilogues_seen":   list(self.epilogues_seen),
+            "slain":            list(self.slain),
         }
 
     @classmethod
@@ -761,6 +785,7 @@ class StoryManager:
         sm.choices = dict(d.get("choices", {}) or {})
         sm.log = list(d.get("log", []) or [])
         sm.epilogues_seen = list(d.get("epilogues_seen", []) or [])
+        sm.slain = list(d.get("slain", []) or [])
         if sm.main_story_id:
             sm._migrate(sm.main_story_id, MAIN_STORIES.get(sm.main_story_id), m, legacy)
         for sid, st in sm.side_stories.items():
@@ -1131,38 +1156,43 @@ def _main_lines(mgr, player):
     st = mgr._main
     idx = st.get("step_idx", 0)
     out.append(f"{col}{_B}{story.get('title', '')}{_R}")
-    done_n = len(steps) if st.get("complete") else idx
-    out.append(f"{_DIM}Chapters{_R} [{_bar(done_n, len(steps), col, 30)}] {col}{done_n}/{len(steps)}{_R}")
+    total = path_length(story)
+    done_n = total if st.get("complete") else min(total, sum(
+        1 for e in mgr.log if e.startswith(f"{mgr.main_story_id}:")))
+    out.append(f"{_DIM}Chapters{_R} [{_bar(done_n, total, col, 30)}] {col}{done_n}/{total}{_R}")
     out.append("")
     last_act = None
+    pending_act = None
+    shown_act = None
     for i, s in enumerate(steps):
         if s.get("act"):
-            last_act = s["act"]
+            last_act = pending_act = s["act"]
         if i >= idx and not st.get("complete"):
             break
-        if s.get("act"):
-            out.append(f"{_GOLD}{s['act']}{_R}")
         k = f"{mgr.main_story_id}:{s['id']}"
-        mark = f"{_GREEN}✓{_R}" if (k in mgr.log or i < idx or st.get("complete")) else f"{_DIM}·{_R}"
+        if k not in mgr.log:
+            continue                      # skipped branch / never played
+        if pending_act and pending_act != shown_act:
+            out.append(f"{_GOLD}{pending_act}{_R}")
+            shown_act = pending_act
         extra = ""
         if s["type"] == "choice":
             ch = mgr.choices.get(k)
             lbl = next((o.get("label") for o in s.get("options", []) if o.get("key") == ch), ch)
             if lbl:
                 extra = f"  {_DIM}— {lbl}{_R}"
-        out.append(f"  {mark} {_GREY}{s['title']}{_R}{extra}")
+        out.append(f"  {_GREEN}✓{_R} {_GREY}{s['title']}{_R}{extra}")
     if st.get("complete"):
         out.append("")
         out.append(f"{_GREEN}{_B}★ COMPLETED!{_R}  {_DIM}Press [E] to read the epilogue again.{_R}")
         return out
     step = mgr._cur(story, st)
     if step:
-        if step.get("act") and step["act"] != (_act_of(story, idx - 1) if idx else None):
-            out.append(f"{_GOLD}{step['act']}{_R}")
-        elif not step.get("act") and last_act and idx == 0:
-            out.append(f"{_GOLD}{last_act}{_R}")
+        cur_act = _act_of(story, idx)
+        if cur_act and cur_act != shown_act:
+            out.append(f"{_GOLD}{cur_act}{_R}")
         out.extend("  " + l for l in _step_lines(mgr, story, st, step, player, col, "main"))
-        left = len(steps) - idx - 1
+        left = path_length({"steps": steps[idx + 1:]})
         if left > 0:
             out.append(f"  {_DIM}… {left} more chapter{'s' if left != 1 else ''} to uncover.{_R}")
     return out
@@ -1308,9 +1338,24 @@ def _tagline(s):
     return (first[:70] + "…") if len(first) > 71 else first
 
 
+def path_length(story):
+    """Chapters on one play-through: alternative steps sharing a "branch"
+    name count once."""
+    groups = set()
+    n = 0
+    for st in story.get("steps", []):
+        b = st.get("branch")
+        if b:
+            if b in groups:
+                continue
+            groups.add(b)
+        n += 1
+    return n
+
+
 def story_meta(s):
     """(chapter count, act count, hours estimate text) for the picker."""
-    n = len(s.get("steps", []))
+    n = path_length(s)
     acts = sum(1 for st in s.get("steps", []) if st.get("act"))
     hours = s.get("length") or f"~{max(1, round(n * 0.45))}-{max(2, round(n * 0.6))} h"
     return n, acts, hours

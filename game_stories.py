@@ -505,7 +505,7 @@ class StoryManager:
             else:
                 st["progress"] = st.get("progress", 0) + 1
             if etype == "talk" and str(key).startswith("npc:"):
-                self._last_talk = (key[4:], step)
+                self._last_talk = [key[4:], step, 0]
             if st["progress"] >= step.get("required", 1):
                 self._complete(kind, sid, story, st, step, player, completed)
         completed.extend(self.check_flags(player))
@@ -648,10 +648,16 @@ class StoryManager:
         self._in_dialogue = True
         try:
             lines = []
-            if self._last_talk and self._last_talk[0] == npc_id:
-                d = (self._last_talk[1].get("dialogue") or {}).get(npc_id)
-                lines.extend(_as_list(d))
-            self._last_talk = None
+            lt = self._last_talk
+            if lt and lt[0] == npc_id:
+                lines.extend(_as_list((lt[1].get("dialogue") or {}).get(npc_id)))
+                # the scene asks once and an NPC's own interact() may ask again
+                # in the same conversation: serve two reads, then forget
+                lt[2] += 1
+                if lt[2] >= 2:
+                    self._last_talk = None
+            elif lt:
+                self._last_talk = None
             for kind, sid, story, st in self._tracks():
                 step = effective_step(self._cur(story, st))
                 if step and not self._gated(step, player):
@@ -1320,6 +1326,14 @@ def _journal(mgr, player):
             kind, sid, step = choices[0]
             choose_option(mgr, player, kind, sid, step)
             flush_story_popups(player)
+        elif ch == "l" and tab == "4" and player is not None:
+            try:
+                import game_structures
+                game_structures.lore_reader(player)
+            except (EOFError, KeyboardInterrupt):
+                raise
+            except Exception as e:
+                _log(f"lore reader failed: {e!r}")
         elif ch == "e" and story and mgr.main_complete:
             _show_epilogue({"mgr": mgr, "sid": mgr.main_story_id}, player)
         elif ch in ("0", "q", "", "j"):

@@ -133,6 +133,8 @@ def _normalise_story(sid, story):
         st.setdefault("completion_text", "")
         if st["type"] == "choice":
             st.setdefault("options", [])
+            if not st["options"]:
+                st.setdefault("external", True)   # decided in the world, not the journal
     return True
 
 
@@ -570,6 +572,11 @@ class StoryManager:
                             step = _with_option(step, opt)
                             ok = True
                             break
+                    # Option-less choices (e.g. The Crown's Plea's Duskthorn
+                    # decision) are resolved elsewhere and signal it via the
+                    # target flag, like the original contract.
+                    if not ok and not step.get("options"):
+                        ok = any(flags.get(f) for f in _as_list(step.get("target")))
                 elif t == "item":
                     cnt = 0
                     try:

@@ -443,6 +443,9 @@ class Player:
         self.atk     += sign * item.atk_bonus
         self.defense += sign * getattr(item, 'def_bonus', 0)
         self.stealth += sign * getattr(item, 'stealth_bonus', 0)
+        # Crit / potion / gold-per-kill bonuses of affixed & unique gear
+        for attr, v in (getattr(item, 'extra', None) or {}).items():
+            setattr(self, attr, getattr(self, attr, 0) + sign * v)
         self.hp = min(self.hp, self.max_hp)
         self.mp = min(self.mp, self.max_mp)
 

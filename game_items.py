@@ -817,26 +817,26 @@ _con("Panacea",         "antidote", 0, 70, "Cures every ailment and restores 80 
 # ── Bombs & scrolls (thrown/used in battle) ──────────────────────
 _con("Fire Bomb",       "bomb",   35, 18, "Clay pot of lamp oil. Damages and may burn.", element="fire")
 _con("Smoke Bomb",      "bomb",    0, 20, "Vanish in a cloud of smoke: escape any normal fight.", icon="smoke")
-_con("Frost Bomb",      "bomb",   45, 24, "Shatters into freezing shards. May stun.", "uncommon",
-     bomb=("stun", 30), element="ice")
+_con("Frost Bomb",      "bomb",   45, 24, "Shatters into freezing shards.", "uncommon",
+     bomb=("none", 0), element="ice")
 _con("Venom Flask",     "bomb",   30, 20, "Bursts into toxic mist. Poisons often.", "uncommon",
      bomb=("poison", 70), element="poison")
-_con("Thunder Flask",   "bomb",   60, 34, "Storm in a bottle. Heavy damage, may stun.", "rare",
-     bomb=("stun", 35), element="storm")
+_con("Thunder Flask",   "bomb",   60, 34, "Storm in a bottle. Heavy damage.", "rare",
+     bomb=("none", 0), element="storm")
 _con("Holy Grenade",    "bomb",   80, 45, "A reliquary packed with blessed powder.", "rare",
      bomb=("none", 0), element="holy")
 _con("Hellfire Flask",  "bomb",  110, 60, "Duskthorn brimstone. Massive fire damage.", "epic",
      bomb=("burn", 80), element="fire", region="DUSKTHORN")
 _con("Sand Bomb",       "bomb",   25, 14, "A sack of grit that blinds and stings.",
-     bomb=("stun", 25), region="ASH SANDS", element="earth")
+     bomb=("none", 0), region="ASH SANDS", element="earth")
 _con("Escape Scroll",   "bomb",    0, 30, "Read aloud to be whisked out of a normal fight.",
      "uncommon", icon="scroll", element="arcane")
 _con("Sandveil Powder", "bomb",    0, 26, "Desert powder that hides you in a whirl of sand.",
      "uncommon", icon="smoke", region="ASH SANDS")
 _con("Scroll of Fireball","bomb", 70, 40, "Unleashes a single fireball.", "rare", icon="scroll",
      element="fire")
-_con("Scroll of Lightning","bomb", 90, 52, "Calls down a lightning strike. May stun.", "rare",
-     icon="scroll", bomb=("stun", 40), element="storm")
+_con("Scroll of Lightning","bomb", 90, 52, "Calls down a lightning strike.", "rare",
+     icon="scroll", bomb=("none", 0), element="storm")
 
 # ── Buffs, foods & brews ─────────────────────────────────────────
 _con("Strength Draught","buff",   10, 40, "ATK+10 for 3 turns.", "uncommon", icon="potion_red")
@@ -1713,9 +1713,9 @@ CRAFTING_RECIPES = [
     _recipe("Spiced Jerky",      {"Boar Hide": 1, "Coal Lump": 1}, "ATK+6 for 3 turns", 3),
     _recipe("Smelling Salts",    {"Desert Glass": 1, "Silverleaf Herb": 1}, "Cures stun", 3),
     _recipe("Panacea",           {"Holy Relic": 1, "Silverleaf Herb": 3}, "Cures all, +80 HP", 2),
-    _recipe("Frost Bomb",        {"Frost Crystal": 1, "Coal Lump": 1}, "Ice damage, may stun", 3),
+    _recipe("Frost Bomb",        {"Frost Crystal": 1, "Coal Lump": 1}, "Freezing shards", 3),
     _recipe("Venom Flask",       {"Venom Fang": 2, "Desert Glass": 1}, "Poison cloud", 3),
-    _recipe("Thunder Flask",     {"Sun Topaz": 1, "Mana Stone": 1}, "Storm damage, may stun", 2),
+    _recipe("Thunder Flask",     {"Sun Topaz": 1, "Mana Stone": 1}, "Heavy storm damage", 2),
     _recipe("Holy Grenade",      {"Holy Relic": 1, "Coal Lump": 2}, "Blessed explosion", 2),
     _recipe("Hellfire Flask",    {"Brimstone": 2, "Soul Ember": 1}, "Massive fire damage", 2),
     _recipe("Smoke Bomb",        {"Coal Lump": 2, "Feather": 1}, "Escape any normal fight", 2),

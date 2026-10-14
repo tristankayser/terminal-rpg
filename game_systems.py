@@ -168,7 +168,8 @@ def _throw_bomb(player, enemy, idx, allow_escape, log):
     """Bomb items. Returns 'escaped', 'used' or None (not used)."""
     from game_items import remove_items
     it = player.inventory[idx]
-    if it.name == "Smoke Bomb":
+    from game_items import ESCAPE_ITEMS, bomb_status
+    if it.name in ESCAPE_ITEMS:
         if not allow_escape:
             log.append(f"{C_RED}The smoke clears — there is no escaping this foe!{R}")
             return None
@@ -179,10 +180,11 @@ def _throw_bomb(player, enemy, idx, allow_escape, log):
     dmg = it.value + player.level * 3 + random.randint(0, 10)
     dealt = enemy.take_damage(dmg)
     log.append(f"{C_ORANGE}{B}BOOM!{R} {it.name} hits {enemy.name} for {dealt} damage!")
-    if random.randint(1, 100) <= 40:
-        from game_items import Burn
-        enemy.add_status(Burn(duration=2, damage=5 + player.level))
-        log.append(f"{C_ORANGE}{enemy.name} is set ablaze!{R}")
+    status, chance = bomb_status(it.name, player.level)
+    if status is not None and random.randint(1, 100) <= chance:
+        enemy.add_status(status)
+        verb = {"Burn": "is set ablaze", "Poison": "is poisoned", "Stun": "is stunned"}.get(status.name, "is hit hard")
+        log.append(f"{C_ORANGE}{enemy.name} {verb}!{R}")
     return "used"
 
 
@@ -384,7 +386,7 @@ def award_victory(player, enemy, used_potion=False):
                 print(C(f"{C_GOLD}🏆 Trophy added to {base.name}: {enemy.name}!{R}"))
                 break
 
-    drops = roll_drops(enemy.name)
+    drops = roll_drops(enemy.name, getattr(player, "level", 1))
     if drops:
         print(C(f"\n{C_YELLOW}Loot dropped:{R}"))
         for item in drops:

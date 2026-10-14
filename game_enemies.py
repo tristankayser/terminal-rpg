@@ -198,6 +198,14 @@ ENEMY_STATS = {
     "Dragon Scout":  dict(hp_m=1.8, atk_m=1.6, def_m=1.0, exp_m=3.0, gold_m=2.5, crit=10),
     "Wyvern":        dict(hp_m=2.0, atk_m=1.5, def_m=1.2, exp_m=3.2, gold_m=2.8, dodge=8),
     "Dragon Cultist":dict(hp_m=1.1, atk_m=1.4, def_m=0.6, exp_m=2.8, gold_m=2.2),
+    # Overhaul elites (towns, castles, citadel, kasbah)
+    "Alley Thief":   dict(hp_m=0.8, atk_m=0.9, def_m=0.4, exp_m=0.9, gold_m=1.3, dodge=15),
+    "Cutthroat":     dict(hp_m=1.0, atk_m=1.3, def_m=0.5, exp_m=1.3, gold_m=1.3, crit=18),
+    "Royal Guard":   dict(hp_m=1.5, atk_m=1.2, def_m=1.8, exp_m=1.6, gold_m=1.4),
+    "Imp":           dict(hp_m=0.6, atk_m=1.0, def_m=0.3, exp_m=0.8, gold_m=0.5, dodge=14),
+    "Desert Assassin":dict(hp_m=1.0, atk_m=1.5, def_m=0.5, exp_m=1.6, gold_m=1.5, crit=20, dodge=15),
+    "Sand Scorpion": dict(hp_m=1.0, atk_m=1.1, def_m=0.9, exp_m=1.0, gold_m=0.7),
+    "Demon Knight":  dict(hp_m=1.9, atk_m=1.6, def_m=1.6, exp_m=2.4, gold_m=1.8, crit=12),
 }
 
 # ── PROGRESSIVE difficulty multiplier per dungeon floor ────────
@@ -300,6 +308,22 @@ BOSS_DEFS = {
         hp=450, atk=42, defense=10, exp_reward=1000, gold_reward=650,
         boss_skills=["power_strike", "venom", "drain"],
     ),
+    "Demon Lord Kharzul": dict(hp=1100, atk=66, defense=24, exp_reward=6000, gold_reward=2500,
+                               boss_skills=["fire_breath", "power_strike", "drain", "roar"]),
+    "Hellhound Warden": dict(hp=600, atk=48, defense=16, exp_reward=1600, gold_reward=900,
+                             boss_skills=["fire_breath", "power_strike", "venom"]),
+    "Sand Djinn Azhar": dict(hp=650, atk=50, defense=14, exp_reward=1800, gold_reward=1100,
+                             boss_skills=["roar", "power_strike", "drain"]),
+    "Scorpion Matriarch": dict(hp=600, atk=46, defense=18, exp_reward=1600, gold_reward=900,
+                               boss_skills=["venom", "power_strike", "venom"]),
+    "The Hollow Regent": dict(hp=1000, atk=62, defense=22, exp_reward=5000, gold_reward=2500,
+                              boss_skills=["drain", "power_strike", "roar"]),
+    "Archmage Veyl the Unbound": dict(hp=700, atk=54, defense=14, exp_reward=2200, gold_reward=1300,
+                                      boss_skills=["drain", "power_strike", "fire_breath"]),
+    "Bandit King Rourke": dict(hp=380, atk=32, defense=10, exp_reward=800, gold_reward=700,
+                               boss_skills=["power_strike", "roar"]),
+    "Thieves' Guildmaster": dict(hp=420, atk=34, defense=10, exp_reward=900, gold_reward=800,
+                                 boss_skills=["venom", "power_strike"]),
 }
 
 # These bosses CANNOT appear as random encounters — ever.

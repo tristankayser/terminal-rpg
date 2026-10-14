@@ -154,7 +154,7 @@ def box_top(title: str = "", width: int = 0, colour: str = _GOLD) -> str:
 def box_mid(text: str, width: int = 0, colour: str = _GOLD) -> str:
     w = width or min(_content_w(), 56)
     vis = _vis(text)
-    padded = text + " " * max(0, w - vis - 2)
+    padded = text + " " * max(0, w - vis - 1)   # "║ " + text + pad + "║" == w + 2
     return C(f"{colour}{_B}║{_R} {padded}{colour}{_B}║{_R}")
 
 def box_bot(width: int = 0, colour: str = _GOLD) -> str:

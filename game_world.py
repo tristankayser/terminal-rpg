@@ -162,9 +162,15 @@ class WorldMap:
         self._place_roads()
         self._place_ships()
         self._compute_cont_labels()
-        # Must stay LAST: anything that consumes random numbers before this
-        # point defines the map layout that old save files rely on.
+        # Must stay LAST among the RNG users: anything that consumes random
+        # numbers before this point defines the map layout that old save
+        # files rely on.
         self._place_ruins()
+        # Deterministic repairs (no RNG): ports dropped on inland desert sand
+        # had no ship, and some towns/dungeons ended up on islands with no
+        # way to reach them — e.g. story targets like Sandreach.
+        self._fix_shipless_ports()
+        self._ensure_reachable()
 
     RUIN_NAMES = {
         "A": ["Old Watchtower", "Elderwood Shrine"],
@@ -189,6 +195,81 @@ class WorldMap:
                         self.locations.append({"type":"ruins","icon":"R","name":name,
                                                "x":lx,"y":ly,"continent":cid,"region":cid})
                         break
+
+    def _fix_shipless_ports(self):
+        """Move ports with no water nearby to the closest real shoreline."""
+        moved=False
+        docked={s["port_name"] for s in self.ships}
+        for loc in self.locations:
+            if loc["type"]!="port" or loc["name"] in docked: continue
+            cid=loc["continent"]
+            taken={(l["x"],l["y"]) for l in self.locations}
+            shore=[(x,y) for y in range(1,HEIGHT-1) for x in range(1,WIDTH-1)
+                   if self.cont_map[y][x]==cid and self.terrain[y][x] in (SAND,PLAINS,FOREST,HILL,ROAD)
+                   and (x,y) not in taken
+                   and any(self.terrain[y+dy][x+dx] in (OCEAN,SHALLOWS)
+                           for dx,dy in ((1,0),(-1,0),(0,1),(0,-1)))]
+            if not shore: continue
+            nx,ny=min(shore,key=lambda p:((p[0]-loc["x"])**2+(p[1]-loc["y"])**2,p[1],p[0]))
+            self.terrain[loc["y"]][loc["x"]]=SAND
+            self.terrain[ny][nx]="H"
+            loc["x"],loc["y"]=nx,ny
+            moved=True
+        if moved:
+            self._place_ships()
+
+    def _land_component(self,start):
+        """4-connected walkable tiles reachable on foot (WASD has no diagonals)."""
+        seen={start}; todo=[start]
+        while todo:
+            x,y=todo.pop()
+            for nx,ny in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+                if (0<=nx<WIDTH and 0<=ny<HEIGHT and (nx,ny) not in seen
+                        and self.terrain[ny][nx] not in (OCEAN,SHALLOWS)):
+                    seen.add((nx,ny)); todo.append((nx,ny))
+        return seen
+
+    def _reachable_tiles(self,start):
+        """Tiles reachable from start on foot plus by ship between docked ports."""
+        docked={s["port_name"] for s in self.ships}
+        ports=[(l["x"],l["y"]) for l in self.locations
+               if l["type"]=="port" and l["name"] in docked]
+        reach=set(); todo=[start]; sailed=False
+        while todo:
+            s=todo.pop()
+            if s in reach: continue
+            reach|=self._land_component(s)
+            if not sailed and any(p in reach for p in ports):
+                sailed=True; todo.extend(ports)
+        return reach
+
+    def _ensure_reachable(self):
+        """Lay a sandbar from any stranded location to the reachable world."""
+        cities=[l for l in self.locations if l["type"]=="city"]
+        if not cities: return
+        reach=self._reachable_tiles((cities[0]["x"],cities[0]["y"]))
+        for loc in self.locations:
+            start=(loc["x"],loc["y"])
+            if start in reach: continue
+            same=[p for p in reach if self.cont_map[p[1]][p[0]]==loc["continent"]]
+            goal=set(same) if same else reach
+            # BFS over every tile to the nearest reachable one, then fill water
+            prev={start:None}; q=[start]; hit=None
+            for cur in q:
+                if cur in goal: hit=cur; break
+                x,y=cur
+                for nxt in ((x+1,y),(x-1,y),(x,y+1),(x,y-1)):
+                    if 0<=nxt[0]<WIDTH and 0<=nxt[1]<HEIGHT and nxt not in prev:
+                        prev[nxt]=cur; q.append(nxt)
+            if hit is None: continue
+            p=hit
+            while p is not None:
+                x,y=p
+                if self.terrain[y][x] in (OCEAN,SHALLOWS):
+                    self.terrain[y][x]=SAND
+                    self.cont_map[y][x]=loc["continent"]
+                p=prev[p]
+            reach=self._reachable_tiles((cities[0]["x"],cities[0]["y"]))
 
     def _gen_continents(self):
         for cont in CONTINENTS:
@@ -330,15 +411,22 @@ class WorldMap:
         if not peaks: return
         # Pick the highest point
         peaks.sort(key=lambda p:-self.heightmap[p[1]][p[0]])
-        for lx,ly in peaks[:20]:
-            if not any(abs(l["x"]-lx)<6 and abs(l["y"]-ly)<6 for l in self.locations):
-                self.terrain[ly][lx]=DRAGON_T
-                self.locations.append({
-                    "type":"dragon_cave","icon":DRAGON_T,
-                    "name":"Vaeltharion's Lair",
-                    "x":lx,"y":ly,"continent":"B","region":"B"
-                })
-                break
+        # Prefer a peak with some room around it, but always place the lair:
+        # the Dragon's Curse story can't be finished without it (mines often
+        # took every spot among the 20 highest peaks).
+        taken={(l["x"],l["y"]) for l in self.locations}
+        roomy=[p for p in peaks
+               if not any(abs(l["x"]-p[0])<6 and abs(l["y"]-p[1])<6 for l in self.locations)]
+        free=[p for p in peaks if p not in taken]
+        spot=(roomy or free or [None])[0]
+        if not spot: return
+        lx,ly=spot
+        self.terrain[ly][lx]=DRAGON_T
+        self.locations.append({
+            "type":"dragon_cave","icon":DRAGON_T,
+            "name":"Vaeltharion's Lair",
+            "x":lx,"y":ly,"continent":"B","region":"B"
+        })
 
     def _place_roads(self):
         for cont in CONTINENTS:
@@ -740,17 +828,17 @@ class WorldMap:
                 "A street musician lifts your spirits — you feel refreshed.",
             ]
             msg=random.choice(lines)
-            from game_items import Item
-            gift=Item("Potion","heal",40,5)
+            from game_items import ITEM_POOL
+            gift=ITEM_POOL["Potion"]()
             player.add_item(gift)
             player.hp=min(player.max_hp,player.hp+20)
             player.mp=min(player.max_mp,player.mp+10)
             self.last_msg=f"{C_GREEN}★ {msg} +Potion, +20HP, +10MP{R_}"
         elif etype=="herb_patch":
-            from game_items import Item
+            from game_items import ITEM_POOL
             qty=random.randint(1,3)
             for _ in range(qty):
-                player.add_item(Item("Potion","heal",40,5))
+                player.add_item(ITEM_POOL["Potion"]())
             self.last_msg=f"{C_GREEN}★ You spot wild herbs and gather {qty} Potion(s)!{R_}"
         elif etype=="lost_cache":
             gold=random.randint(40,150)
@@ -883,7 +971,13 @@ class WorldMap:
     def _enter_dragon_cave(self,player,loc):
         if not self.dragon_alive:
             clear(); print(C(f"\n{C_DIM}The cave is silent. Vaeltharion is dead.{R_}"))
-            input(C(f"{C_DIM}(Press Enter){R_}")); return
+            input(C(f"{C_DIM}(Press Enter){R_}"))
+            # Slain before the story got this far: credit the step now,
+            # otherwise "Slay Vaeltharion" could never complete.
+            if player.flags.get("dragon_slain"):
+                completed=player.stories.on_dungeon_clear("Vaeltharion",player)
+                self._handle_story_completions(completed)
+            return
         from game_dungeon import DungeonManager
         clear()
         print(C(f"\n{C_RED}{B_}╔══════════════════════════════════════════╗"))
@@ -937,7 +1031,12 @@ class WorldMap:
             from game_enemies import generate_enemy; from game_systems import run_combat
             e=generate_enemy("dungeon",CONTINENT_DANGER.get(loc.get("continent",""),2),player.level)
             input(C(f"{C_DIM}(Press Enter to fight){R_}"))
-            if run_combat(player,e)=="defeat":
+            outcome=run_combat(player,e)
+            if outcome=="defeat":
+                return
+            if outcome=="escaped":
+                player.flags.pop(key,None)   # the stash is still there
+                self.last_msg=f"{C_DIM}You fled the ruins of {loc['name']}.{R_}"
                 return
             clear()
             gold=random.randint(30,90); player.gold+=gold

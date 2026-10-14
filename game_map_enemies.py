@@ -137,7 +137,8 @@ class MapEnemy:
             nx, ny = self.x+ddx, self.y+ddy
             if self._walkable(nx, ny, terrain, width, height):
                 self.x, self.y = nx, ny
-                return
+                return True
+        return False
 
     def _patrol(self, terrain, width, height):
         if not self.patrol_points:
@@ -146,7 +147,10 @@ class MapEnemy:
         if self.x == tx and self.y == ty:
             self.patrol_idx = (self.patrol_idx + 1) % len(self.patrol_points)
             return
-        self._move_toward(tx, ty, terrain, width, height)
+        if not self._move_toward(tx, ty, terrain, width, height):
+            # Blocked (water, a town...): head for the next waypoint instead
+            # of standing still forever.
+            self.patrol_idx = (self.patrol_idx + 1) % len(self.patrol_points)
 
     def _walkable(self, x, y, terrain, width, height):
         if not (0 <= x < width and 0 <= y < height):
@@ -163,6 +167,7 @@ class MapEnemy:
             "chase_target": self.chase_target,
             "alert_cooldown": self.alert_cooldown,
             "level": self.level,
+            "calm_turns": self.calm_turns,
         }
 
     @classmethod
@@ -173,6 +178,7 @@ class MapEnemy:
         e.chase_target  = d.get("chase_target")
         e.alert_cooldown= d.get("alert_cooldown", 0)
         e.level         = d.get("level", 1)
+        e.calm_turns    = d.get("calm_turns", 0)
         return e
 
 
@@ -224,7 +230,8 @@ def spawn_world_enemies(locations, terrain, width, height, count=18, cont_map=No
             py = cy + random.randint(-3, 3)
             px = max(1, min(width-2, px))
             py = max(1, min(height-2, py))
-            if terrain[py][px] not in ("~", ";"):
+            if (terrain[py][px] not in ("~", ";")
+                    and (px, py) not in loc_positions):
                 patrol.append((px, py))
 
         enemies.append(MapEnemy(name, cx, cy, patrol))

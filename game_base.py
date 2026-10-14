@@ -142,9 +142,9 @@ ADVANCED_RECIPES = [
     {"name":"Phoenix Elixir",    "tier":2,
      "needs":{"Frost Crystal":2,"Scale Fragment":2,"Feather":2},
      "result":lambda: __import__('game_items').Item("Phoenix Elixir","heal",150,80)},
-    {"name":"Mana Crystal",      "tier":2,
+    {"name":"Lesser Mana Crystal","tier":2,
      "needs":{"Dark Shard":3,"Frost Crystal":2},
-     "result":lambda: __import__('game_items').Item("Mana Crystal","mana",100,70)},
+     "result":lambda: __import__('game_items').Item("Lesser Mana Crystal","mana",100,70)},
     {"name":"Ancient Rune Armor","tier":2,
      "needs":{"Dragon Scale":2,"Iron Ore":6,"Dark Shard":2},
      "result":lambda: __import__('game_items').Equipment("Ancient Rune Armor","armor",hp_bonus=70,def_bonus=18,mp_bonus=15,sell_value=250)},
@@ -313,14 +313,13 @@ class PlayerBase:
                 for _ in range(yield_n):
                     if item_name in ITEM_POOL:
                         item = ITEM_POOL[item_name]()
-                        player.add_item(item)
-                        harvested.append(item.name)
                     else:
                         from game_items import Item
                         item = Item(item_name, "heal", 80, 30)
-                        player.add_item(item)
-                        harvested.append(item_name)
-                print(C(f"\n{_GREEN}🌿 Garden harvest: {', '.join(harvested)}!{_R}"))
+                    if player.add_item(item):
+                        harvested.append(item.name)
+                if harvested:
+                    print(C(f"\n{_GREEN}🌿 Garden harvest: {', '.join(harvested)}!{_R}"))
 
         # Trophy bonus reminder
         atk_b, def_b = self.trophy_bonus()
@@ -353,7 +352,7 @@ class PlayerBase:
             "location_name":  self.location_name,
             "x":              self.x,
             "y":              self.y,
-            "rooms":          self.rooms,
+            "rooms":          dict(self.rooms),
             "storage":        [i.to_dict() for i in self.storage],
             "trophies":       self.trophies,
             "garden_rests":   self.garden_rests,
@@ -363,7 +362,7 @@ class PlayerBase:
     @classmethod
     def from_dict(cls, d):
         b = cls(d["continent_id"], d["name"], d["location_name"], d["x"], d["y"])
-        b.rooms        = d.get("rooms", b.rooms)
+        b.rooms.update(d.get("rooms", {}))   # keep defaults for rooms missing from old saves
         b.trophies     = d.get("trophies", [])
         b.garden_rests = d.get("garden_rests", 0)
         b.total_rests  = d.get("total_rests", 0)
@@ -633,10 +632,15 @@ class BaseMenu:
         if not (0 <= idx < len(available)): return
         rec = available[idx]
         from game_items import remove_items
+        import copy
+        before = copy.deepcopy(self.player.inventory)
         for mat_name, qty in rec["needs"].items():
             remove_items(self.player.inventory, mat_name, qty)
         result = rec["result"]()
-        self.player.add_item(result)
+        if not self.player.add_item(result):
+            # Bag full: give the materials back instead of destroying them
+            self.player.inventory[:] = before
+            input(C(f"{_DIM}(Enter){_R}")); return
         print(C(f"\n{_GREEN}Crafted: {result}!{_R}"))
         input(C(f"{_DIM}(Press Enter){_R}"))
 

@@ -67,7 +67,7 @@ def T(key: str, **kwargs) -> str:
     if kwargs:
         try:
             text = text.format(**kwargs)
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, ValueError):
             pass
     return text
 
@@ -105,7 +105,7 @@ _S: dict[str, dict[str, str]] = {
     # ── MOVEMENT MODE ──────────────────────────────────────────
     "move.title":       {"EN":"MOVEMENT MODE","DE":"BEWEGUNGSMODUS","FR":"MODE DE DÉPLACEMENT","ES":"MODO DE MOVIMIENTO","PT":"MODO DE MOVIMENTO","IT":"MODALITÀ MOVIMENTO","RU":"РЕЖИМ ДВИЖЕНИЯ","PL":"TRYB RUCHU","NL":"BEWEGINGSMODUS","SV":"RÖRELSLÄGE","JA":"移動モード","ZH":"移动模式","KO":"이동 모드","AR":"وضع الحركة","TR":"HAREKET MODU","CS":"REŽIM POHYBU","HU":"MOZGÁSMÓD","RO":"MOD DE MIȘCARE","FI":"LIIKETILA","NO":"BEVEGELSESMODUS"},
     "move.wasd":        {"EN":"WASD  (4 directions)","DE":"WASD  (4 Richtungen)","FR":"WASD  (4 directions)","ES":"WASD  (4 direcciones)","PT":"WASD  (4 direções)","IT":"WASD  (4 direzioni)","RU":"WASD  (4 направления)","PL":"WASD  (4 kierunki)","NL":"WASD  (4 richtingen)","SV":"WASD  (4 riktningar)","JA":"WASD（4方向）","ZH":"WASD（4方向）","KO":"WASD（4방향）","AR":"WASD (4 اتجاهات)","TR":"WASD (4 yön)","CS":"WASD  (4 směry)","HU":"WASD  (4 irány)","RO":"WASD  (4 direcții)","FI":"WASD  (4 suuntaa)","NO":"WASD  (4 retninger)"},
-    "move.8dir":        {"EN":"8-Direction (Numpad/vi-keys)","DE":"8 Richtungen (Numpad/vi)","FR":"8 directions (Pavé num./vi)","ES":"8 Direcciones (Numpad/vi)","PT":"8 Direções (Numpad/vi)","IT":"8 Direzioni (Numpad/vi)","RU":"8 направлений (Numpad/vi)","PL":"8 Kierunków (Numpad/vi)","NL":"8 Richtingen (Numpad/vi)","SV":"8 Riktningar (Numpad/vi)","JA":"8方向（テンキー/viキー）","ZH":"8方向（小键盘/vi键）","KO":"8방향（숫자패드/vi키）","AR":"8 اتجاهات (Numpad/vi)","TR":"8 Yön (Numpad/vi)","CS":"8 Směrů (Numpad/vi)","HU":"8 Irány (Numpad/vi)","RO":"8 Direcții (Numpad/vi)","FI":"8 Suuntaa (Numpad/vi)","NO":"8 Retninger (Numpad/vi)"},
+    "move.8dir":        {"EN":"8-Direction (Number keys 1-9)","DE":"8 Richtungen (1-9)","FR":"8 directions (touches 1-9)","ES":"8 Direcciones (1-9)","PT":"8 Direções (1-9)","IT":"8 Direzioni (1-9)","RU":"8 направлений (1-9)","PL":"8 Kierunków (1-9)","NL":"8 Richtingen (1-9)","SV":"8 Riktningar (1-9)","JA":"8方向（数字キー1-9）","ZH":"8方向（数字键1-9）","KO":"8방향（숫자 키 1-9）","AR":"8 اتجاهات (1-9)","TR":"8 Yön (1-9)","CS":"8 Směrů (1-9)","HU":"8 Irány (1-9)","RO":"8 Direcții (1-9)","FI":"8 Suuntaa (1-9)","NO":"8 Retninger (1-9)"},
     "move.arrow_note":  {"EN":"Arrow keys work in both modes.","DE":"Pfeiltasten funktionieren in beiden Modi.","FR":"Les touches fléchées fonctionnent dans les deux modes.","ES":"Las teclas de flecha funcionan en ambos modos.","PT":"As teclas de seta funcionam em ambos os modos.","IT":"I tasti freccia funzionano in entrambe le modalità.","RU":"Клавиши со стрелками работают в обоих режимах.","PL":"Klawisze strzałek działają w obu trybach.","NL":"Pijltjestoetsen werken in beide modi.","SV":"Piltangenterna fungerar i båda lägena.","JA":"矢印キーはどちらのモードでも使えます。","ZH":"两种模式均支持方向键。","KO":"화살표 키는 두 모드 모두 작동합니다.","AR":"مفاتيح الأسهم تعمل في كلا الوضعين.","TR":"Ok tuşları her iki modda da çalışır.","CS":"Šipky fungují v obou režimech.","HU":"A nyílbillentyűk mindkét módban működnek.","RO":"Tastele săgeată funcționează în ambele moduri.","FI":"Nuolinäppäimet toimivat molemmissa tiloissa.","NO":"Piltastene fungerer i begge moduser."},
 
     # ── WORLD MAP ──────────────────────────────────────────────

@@ -61,35 +61,47 @@ CMD_MAP = {
 
 # ── Low-level single-char readers ────────────────────────────────
 
+_ESC_SEQS = {
+    'A':'arrow_up', 'B':'arrow_down', 'C':'arrow_right', 'D':'arrow_left',
+    # Home/PgUp/End/PgDn (numpad with NumLock off) act as diagonals, like on Windows
+    'H':'diag_nw', '1~':'diag_nw', '7~':'diag_nw',
+    '5~':'diag_ne',
+    'F':'diag_sw', '4~':'diag_sw', '8~':'diag_sw',
+    '6~':'diag_se',
+}
+
+
 def _read_raw_unix(stream):
     """Read one raw keypress from a Unix stream. Returns char or arrow string."""
-    import tty, termios
+    import tty, termios, select
     fd = stream.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = stream.read(1)
-        if ch == '\x1b':
-            # Try to read escape sequence (arrow keys etc.)
-            # setraw + non-blocking peek
-            import select
-            r, _, _ = select.select([stream], [], [], 0.05)
-            if r:
-                ch2 = stream.read(1)
-                if ch2 == '[':
-                    r2, _, _ = select.select([stream], [], [], 0.05)
-                    if r2:
-                        ch3 = stream.read(1)
-                        return {'A':'arrow_up','B':'arrow_down',
-                                'C':'arrow_right','D':'arrow_left'}.get(ch3, '\x1b')
-            return '\x1b'
+        # Read straight from the fd: the text-mode stream buffers ahead, so
+        # select() never saw the rest of an arrow-key sequence and every arrow
+        # press came back as a bare Escape (= Quit).
+        data = os.read(fd, 1)
+        if data and data[0] >= 0xC0:          # UTF-8 lead byte (é, ö, ...)
+            need = 1 if data[0] < 0xE0 else 2 if data[0] < 0xF0 else 3
+            while need and select.select([fd], [], [], 0.05)[0]:
+                data += os.read(fd, 1); need -= 1
+        if data == b'\x1b' and select.select([fd], [], [], 0.05)[0]:
+            data += os.read(fd, 16)
+        ch = data.decode('utf-8', errors='ignore')
+        if ch.startswith('\x1b') and len(ch) > 1:
+            # CSI ("ESC [") or SS3 ("ESC O", application cursor mode).
+            # Unknown sequences (F-keys, Insert, Alt+key) are ignored —
+            # they must not count as a bare Escape, which opens Quit.
+            if ch[1] in '[O':
+                return _ESC_SEQS.get(ch[2:], '')
+            return ''
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         # Flush any pending input so it doesn't echo to next render
         try:
-            import termios as _t
-            _t.tcflush(fd, _t.TCIFLUSH)
+            termios.tcflush(fd, termios.TCIFLUSH)
         except Exception:
             pass
 
@@ -139,7 +151,7 @@ def _getch():
 class InputHandler:
     """
     mode: 'wasd'   — WASD 4-dir  (W/A/S/D + arrows)
-          'numpad' — 8-dir (numpad 1-9, vi-keys YUHJKLBN, + arrows)
+          'numpad' — 8-dir (number keys 1-9 + arrows)
 
     Returns from get_action():
         ('move', dx, dy)

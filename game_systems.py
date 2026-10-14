@@ -293,6 +293,7 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
 
         if fled:
             player.defense = base_defense
+            player.temp_atk_buff = player.temp_atk_turns = 0
             _draw_combat(player, enemy, is_boss, log, allow_escape, False, rnd)
             input(C(f"{C_DIM}(Press Enter){R}"))
             return "escaped"
@@ -323,6 +324,8 @@ def run_combat(player, enemy, allow_escape=True, first_strike=False):
         player.defense = base_defense
 
     player.defense = base_defense
+    # Potion ATK buffs last for this battle only (they used to carry over)
+    player.temp_atk_buff = player.temp_atk_turns = 0
 
     # ── Result ──
     clear()
@@ -799,7 +802,7 @@ class Town:
     # ── CRAFTING ─────────────────────────────────────────────
 
     def crafting_bench(self):
-        from game_items import material_counts, remove_items, INVENTORY_LIMIT, STACKABLE_TYPES
+        from game_items import material_counts, remove_items, inventory_add
         msg = ""
         while True:
             self._header("Crafting Bench")
@@ -845,8 +848,13 @@ class Town:
             if not (0 <= idx < len(available)): continue
             rec = available[idx]
             results = [rec["result"]() for _ in range(rec.get("qty", 1))]
-            if len(self.player.inventory) >= INVENTORY_LIMIT and \
-                    not any(r.item_type in STACKABLE_TYPES for r in results):
+            # Dry run on a copy: the old check let a full bag eat the
+            # materials when a new stackable result had no stack to join
+            import copy
+            trial = copy.deepcopy(self.player.inventory)
+            for mat_name, qty in rec["needs"].items():
+                remove_items(trial, mat_name, qty)
+            if not all(inventory_add(trial, copy.deepcopy(r)) for r in results):
                 msg = f"{C_RED}Your bag is full — make room first.{R}"; continue
             for mat_name, qty in rec["needs"].items():
                 remove_items(self.player.inventory, mat_name, qty)
@@ -922,7 +930,7 @@ class Town:
                 for i, it in enumerate(gs.items, 1):
                     rcol = it.rarity_col() if hasattr(it,"rarity_col") else C_WHITE
                     stat = f"  {C_DIM}{it.stat_line()}{R}" if hasattr(it,"stat_line") else ""
-                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{it.name:<26}{R}{stat}"))
+                    print(C(f"{C_GOLD}{B}[{i:>2}]{R} {rcol}{str(it):<26}{R}{stat}"))
             print()
             print(C(f"  {C_GOLD}[W]{R}{C_DIM} Withdraw  {C_GOLD}[S]{R} Store from bag  {C_GOLD}[0]{R} Back{R}"))
             ch = prompt("Choice").lower()
@@ -936,7 +944,7 @@ class Town:
                 if not player.inventory:
                     print(C(f"{C_DIM}Your bag is empty.{R}")); input(C(f"{C_DIM}(Enter){R}")); continue
                 for i,it in enumerate(player.inventory,1):
-                    print(C(f"  {C_GOLD}[{i}]{R} {it.name}"))
+                    print(C(f"  {C_GOLD}[{i}]{R} {it}"))
                 ch2 = prompt("Store bag slot # (0=cancel)")
                 if ch2.isdigit() and 1<=int(ch2)<=len(player.inventory):
                     it = player.inventory[int(ch2)-1]

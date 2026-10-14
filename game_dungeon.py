@@ -351,6 +351,8 @@ class DungeonManager:
             quit_armed = False
             _, dx, dy = action
             result = floor.move(dx, dy)
+            if result != "blocked":
+                player.tick_stealth()   # stealth fades per step, as on the world map
             outcome, msg = self._handle(result, player, floor)
             if outcome:
                 return outcome

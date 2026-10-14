@@ -840,3 +840,44 @@ def town_shop_stock(region_name=""):
         ],
     }
     return base + extras.get(region_name.upper(),[])
+
+
+# ═══════════════════════════════════════════════════════════════
+# PUBLIC LOOKUP API  (cross-team contract #5)
+# ═══════════════════════════════════════════════════════════════
+
+RARITIES = ("common", "uncommon", "rare", "epic", "legendary")
+
+
+def make_item(name):
+    """A fresh instance of the item called `name`, or None if unknown."""
+    if not name:
+        return None
+    fn = ITEM_POOL.get(name)
+    if fn is None:
+        low = str(name).strip().lower()
+        for k, f in ITEM_POOL.items():
+            if k.lower() == low:
+                fn = f; break
+    if fn is None:
+        return None
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def _item_rarity(it):
+    r = getattr(it, "rarity", None)
+    if r:
+        return r
+    return "common"
+
+
+def random_loot(level, rarity=None, rng=None):
+    """A random item fitting `level` (and `rarity` if given). Never None."""
+    rng = rng or random
+    names = list(ITEM_POOL)
+    if rarity:
+        names = [n for n in names if _item_rarity(ITEM_POOL[n]()) == rarity] or names
+    return ITEM_POOL[rng.choice(names)]()

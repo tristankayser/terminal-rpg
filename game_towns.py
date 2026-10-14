@@ -145,7 +145,7 @@ def _style(cid):
         }
         pal.update(_box_palette(DOUBLE, (160, 160, 172), "stone wall"))
         return dict(cid=cid, name="Ironspire", ground=":", street=".", plaza=".",
-                    box=DOUBLE, palette=pal, centre="statue", tree="T", flower="k",
+                    box=DOUBLE, palette=pal, centre="statue", tree="T", flower="c",
                     colour=fg(175, 160, 130), flavour="mountain")
     if cid == "D":      # Ash Sands — sandstone, awnings, oasis
         pal = {
@@ -443,7 +443,7 @@ class TownPlan:
             for x in range(1, w - 1):
                 self._set(x, y, "x")
         # ring road just inside the side walls
-        for y in range(1, wall_end + 1):
+        for y in range(1, wall_end + (1 if self.port else 0)):
             self._set(1, y, S)
             self._set(w - 2, y, S)
         # main streets & the dark alley between the two middle rows
@@ -1525,6 +1525,16 @@ def _free_spot(sc, spots, rng, avoid=(), min_dist=0, far_from=None):
     return None
 
 
+def _static_spot(sc, plan, cands, avoid=()):
+    """First candidate where a never-moving NPC blocks no door or path."""
+    for p in cands:
+        if p in avoid or p in sc.triggers or not sc.walkable(*p):
+            continue
+        if plan.reserve_static(*p):
+            return p
+    return None
+
+
 def _populate(sc, ctx):
     plan = ctx.plan
     pr = ctx.people_rng            # stable per town: the same folk every visit
@@ -1641,7 +1651,7 @@ def _populate(sc, ctx):
     # ── smith at the anvil ──
     if plan.anvil:
         ax, ay = plan.anvil
-        p = _free_spot(sc, [(ax + dx, ay + dy) for dx, dy in N4], pr, avoid=reserved | occupied)
+        p = _static_spot(sc, plan, [(ax + dx, ay + dy) for dx, dy in N4], avoid=reserved | occupied)
         if p:
             occupied.add(p)
             sc.add_entity(_person(p[0], p[1], next(name_iter), "blacksmith", (240, 140, 70),
@@ -1669,7 +1679,7 @@ def _populate_harbour(sc, ctx, name_iter, occupied, reserved):
         dx, dy = hb["door"]
         near = [(dx + 2, dy + 1), (dx - 2, dy + 1), (dx + 3, dy + 1), (dx + 2, dy + 2)]
     near += [(plan.mx - 1, board + 1), (plan.mx + 2, board + 1)]
-    p = _free_spot(sc, near, pr, avoid=reserved | occupied)
+    p = _static_spot(sc, plan, near, avoid=reserved | occupied)
     if p:
         occupied.add(p)
         sc.add_entity(_person(p[0], p[1], next(name_iter), "dockmaster", (90, 200, 230), [],
@@ -1678,7 +1688,7 @@ def _populate_harbour(sc, ctx, name_iter, occupied, reserved):
     # captain & sailors on deck
     if plan.ship:
         cx, cy = plan.ship["captain"]
-        if sc.walkable(cx, cy):
+        if _static_spot(sc, plan, [(cx, cy)], avoid=occupied):
             occupied.add((cx, cy))
             sc.add_entity(_person(cx, cy, f"Captain {next(name_iter)}", f"master of the {plan.ship['name']}",
                                   (240, 240, 240), [], f"{ctx.slug}_captain", ai="static",
@@ -1697,7 +1707,7 @@ def _populate_harbour(sc, ctx, name_iter, occupied, reserved):
     for (px, y0, y1, dark) in plan.piers:
         if dark:
             continue
-        p = _free_spot(sc, [(px, y1), (px + 1, y1)], pr, avoid=occupied)
+        p = _static_spot(sc, plan, [(px, y1), (px + 1, y1)], avoid=occupied)
         if p and pr.random() < 0.8:
             occupied.add(p)
             sc.add_entity(_person(p[0], p[1], next(name_iter), "fisher", (90, 170, 220),

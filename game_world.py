@@ -65,7 +65,7 @@ def register_place_type(loc_type, glyph, colour, name, enter=None, arrive=None,
 
 def _load_extensions():
     """Import feature modules so they can call register_place_type()."""
-    for mod in ("game_castles", "game_structures", "game_townmap"):
+    for mod in ("game_capital", "game_castles", "game_structures", "game_towns"):
         try:
             __import__(mod)
         except ImportError:
@@ -243,8 +243,7 @@ class WorldMap:
     def _place_extras(self):
         _load_extensions()
         rng = random.Random(self.seed * 7919 + 17)
-        for mod, fn in (("game_castles", "place_castles"),
-                        ("game_townmap", "place_towns"),
+        for mod, fn in (("game_capital", "place_capital"),
                         ("game_structures", "place_structures")):
             try:
                 m = __import__(mod)

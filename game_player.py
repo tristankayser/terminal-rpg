@@ -401,6 +401,12 @@ class Player:
 
     @staticmethod
     def describe_consumable(it):
+        try:
+            from game_items import describe_effect
+            if it.item_type in ("heal", "mana", "antidote", "buff", "bomb"):
+                return describe_effect(it)
+        except Exception:
+            pass
         t = it.item_type
         if t == "heal":     return f"+{it.value} HP"
         if t == "mana":     return f"+{it.value} MP"

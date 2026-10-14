@@ -872,7 +872,7 @@ def ask_inspect(entries, player=None, prompt_text="Inspect which #"):
 # LIST ROWS (shared by the town bag, quick bag and guild storage)
 # ═══════════════════════════════════════════════════════════════
 
-def entry_row(i, entry, name_w=26):
+def entry_row(i, entry, name_w=34):
     """'[ 3] † Name xN   detail' — slot and stats appear exactly once."""
     from game_items import item_glyph
     it = entry.item if isinstance(entry, ItemStack) else entry
@@ -892,7 +892,7 @@ def entry_row(i, entry, name_w=26):
     return f"{C_GOLD}{B_}[{i:>2}]{R_} {item_glyph(it)} {rcol}{name:<{name_w}}{R_} {detail}"
 
 
-def worn_row(slot, item, name_w=26):
+def worn_row(slot, item, name_w=34):
     from game_items import item_glyph
     name = item.name if len(item.name) <= name_w else item.name[:name_w - 1] + "…"
     return (f"  {C_DIM}{slot:<7}{R_} {item_glyph(item)} {item.rarity_col()}{name:<{name_w}}{R_} "

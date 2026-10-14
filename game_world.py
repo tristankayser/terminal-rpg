@@ -36,6 +36,47 @@ TILE={
     "b":      (fg(255,200,80)+B_,"b"),   # player base marker on map
 }
 
+# ── Extension registry ───────────────────────────────────────────
+# Feature modules (game_capital, game_structures, ...) register extra map
+# glyphs, arrival messages and enter handlers here instead of editing the
+# core world code.  See register_place_type().
+TILE_NAMES = {}          # glyph -> human name for the HUD ("Capital", "Shrine")
+ARRIVE_MSG = {}          # loc type -> callable(loc) -> str
+ENTER_HANDLERS = {}      # loc type -> callable(world, player, loc, autosave)
+BLOCKED_FOR_MONSTERS = set(["~", ";", "#", "P", "H", "X", "R", "M", "V"])
+
+def register_place_type(loc_type, glyph, colour, name, enter=None, arrive=None,
+                        symbol=None):
+    """Register a new world-map place type.
+
+    loc_type : value of loc["type"] in world.locations
+    glyph    : single ASCII char stored in world.terrain (must be unique)
+    colour   : ANSI colour prefix (use fg(r,g,b)+B_)
+    name     : HUD tile name
+    enter    : callable(world, player, loc, autosave) run when E is pressed
+    arrive   : callable(loc) -> str message when stepping onto the place
+    symbol   : char drawn on screen (defaults to glyph)
+    """
+    TILE[glyph] = (colour, symbol or glyph)
+    TILE_NAMES[glyph] = name
+    BLOCKED_FOR_MONSTERS.add(glyph)
+    if enter:  ENTER_HANDLERS[loc_type] = enter
+    if arrive: ARRIVE_MSG[loc_type] = arrive
+
+def _load_extensions():
+    """Import feature modules so they can call register_place_type()."""
+    for mod in ("game_castles", "game_structures", "game_townmap"):
+        try:
+            __import__(mod)
+        except ImportError:
+            pass
+        except Exception as e:          # never let a feature module break the map
+            try:
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"), "a") as f:
+                    f.write(f"extension {mod} failed: {e!r}\n")
+            except Exception:
+                pass
+
 def paint(ch):
     col,sym=TILE.get(ch,("",ch)); return f"{col}{sym}{R_}"
 def div(w=70,c=C_DIM): return f"  {c}{'─'*w}{R_}"
@@ -166,6 +207,9 @@ class WorldMap:
         # numbers before this point defines the map layout that old save
         # files rely on.
         self._place_ruins()
+        # New content (castles, walkable towns, structures) uses its OWN
+        # seeded RNG so the base layout above stays identical for old saves.
+        self._place_extras()
         # Deterministic repairs (no RNG): ports dropped on inland desert sand
         # had no ship, and some towns/dungeons ended up on islands with no
         # way to reach them — e.g. story targets like Sandreach.
@@ -195,6 +239,27 @@ class WorldMap:
                         self.locations.append({"type":"ruins","icon":"R","name":name,
                                                "x":lx,"y":ly,"continent":cid,"region":cid})
                         break
+
+    def _place_extras(self):
+        _load_extensions()
+        rng = random.Random(self.seed * 7919 + 17)
+        for mod, fn in (("game_castles", "place_castles"),
+                        ("game_townmap", "place_towns"),
+                        ("game_structures", "place_structures")):
+            try:
+                m = __import__(mod)
+            except ImportError:
+                continue
+            f = getattr(m, fn, None)
+            if f:
+                try:
+                    f(self, rng)
+                except Exception as e:
+                    try:
+                        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log"), "a") as fh:
+                            fh.write(f"{mod}.{fn} failed: {e!r}\n")
+                    except Exception:
+                        pass
 
     def _fix_shipless_ports(self):
         """Move ports with no water nearby to the closest real shoreline."""
@@ -595,7 +660,7 @@ class WorldMap:
                 FOREST:"Forest",MOUNTAIN:"Mountains",SNOW:"Snow",
                 HILL:"Hills",ROAD:"Road",RIVER:"River",SAND:"Sand",
                 MINE_T:"Mine",DRAGON_T:"Dragon Cave","P":"City","H":"Port",
-                "X":"Dungeon"}.get(ter,"?")
+                "X":"Dungeon","R":"Ruins",**TILE_NAMES}.get(ter,"?")
         cont_col  = cont["col"] if cont else C_WHITE
         cont_name = cont["name"] if cont else "Open Sea"
         loc  = self._loc_at(self.player_x, self.player_y)
@@ -671,7 +736,10 @@ class WorldMap:
                   "ruins":f"{C_PURP}Ruins: {loc['name']}.{R_} {C_DIM}[E] to explore.{R_}",
                   "mine":f"{C_ORAN}Mine: {loc['name']}.{R_} {C_DIM}[E] to enter and mine.{R_}",
                   "dragon_cave":f"{C_RED}{B_}★ DRAGON CAVE: {loc['name']}!{R_} {C_DIM}[E] to enter.{R_}"}
-            self.last_msg=msgs.get(loc["type"],f"At {loc['name']}.")
+            if loc["type"] in ARRIVE_MSG:
+                try: msgs[loc["type"]] = ARRIVE_MSG[loc["type"]](loc)
+                except Exception: pass
+            self.last_msg=msgs.get(loc["type"],f"{C_GOLD}{loc['name']}.{R_} {C_DIM}[E] to enter.{R_}")
             # story hooks
             completed=player.stories.on_visit(loc["name"],player)
             self._handle_story_completions(completed)
@@ -882,6 +950,10 @@ class WorldMap:
         loc=self._loc_at(self.player_x,self.player_y)
         if not loc:
             self.last_msg=f"{C_DIM}Nothing to enter here.{R_}"; return
+
+        if loc["type"] in ENTER_HANDLERS:
+            ENTER_HANDLERS[loc["type"]](self, player, loc, autosave)
+            return
 
         if loc["type"] in ("city","port"):
             from game_systems import Town
@@ -1160,7 +1232,7 @@ class WorldMap:
                 ch=self.terrain[y][x]
                 sym={OCEAN:"~",SHALLOWS:"~",PLAINS:".",FOREST:"f",MOUNTAIN:"^",
                      SNOW:"*",HILL:",",ROAD:"-",RIVER:"/",SAND:":","P":"P","H":"H",
-                     "X":"X","R":"R",MINE_T:"M",DRAGON_T:"V"}.get(ch,".")
+                     "X":"X","R":"R",MINE_T:"M",DRAGON_T:"V"}.get(ch, TILE[ch][1] if ch in TILE_NAMES else ".")
                 col_,_=TILE.get(ch,("",ch)); line+=f"{col_}{sym}{R_}"
             print(line)
         print(C(f"\n{C_CYAN}{B_}CONTINENTS{R_}"))  # overview

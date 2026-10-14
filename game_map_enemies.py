@@ -156,7 +156,11 @@ class MapEnemy:
         if not (0 <= x < width and 0 <= y < height):
             return False
         # Ocean, shallows and location tiles (towns, dungeons...) are off-limits
-        return terrain[y][x] not in ("~", ";", "#", "P", "H", "X", "R", "M", "V")
+        try:
+            from game_world import BLOCKED_FOR_MONSTERS as _blk
+        except Exception:
+            _blk = ("~", ";", "#", "P", "H", "X", "R", "M", "V")
+        return terrain[y][x] not in _blk
 
     def to_dict(self):
         return {

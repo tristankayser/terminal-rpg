@@ -89,7 +89,7 @@ class Trader:
         self.offers = offers[:5]
 
     def open(self, player):
-        from game_items import entry_qty, remove_items
+        from game_items import entry_qty, remove_items, inventory_add
         # Trades already completed in this town stay completed
         done = player.flags.setdefault("trades_done", {}).setdefault(self.town, [])
         self.offers = [o for o in self.offers if f"{o[0]}>{o[2]}" not in done]
@@ -137,13 +137,15 @@ class Trader:
                 print(C(f"\n{_RED}You need {give_q}x {give_n} for this trade.{_R}"))
                 input(C(f"{_DIM}(Enter){_R}")); continue
 
-            # Execute trade — remove given items (stack-aware)
-            remove_items(player.inventory, give_n, give_q)
-
-            # Add received items
-            received = _make_item(recv_n, recv_q)
-            for item in received:
-                player.add_item(item)
+            # Execute trade on a copy of the bag first, so a full bag can't
+            # swallow the payment and drop the goods on the floor.
+            import copy
+            bag = copy.deepcopy(player.inventory)
+            remove_items(bag, give_n, give_q)
+            if not all(inventory_add(bag, item) for item in _make_item(recv_n, recv_q)):
+                print(C(f"\n{_RED}Your bag is too full to take {recv_n} ×{recv_q}.{_R}"))
+                input(C(f"{_DIM}(Enter){_R}")); continue
+            player.inventory[:] = bag
 
             print(C(f"\n{_GREEN}Trade complete!{_R}"))
             print(C(f"Gave: {_RED}{give_n} ×{give_q}{_R}  →  Got: {_GREEN}{recv_n} ×{recv_q}{_R}"))

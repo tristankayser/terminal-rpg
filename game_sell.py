@@ -14,7 +14,7 @@ from game_term import C, clr, W
 from game_items import (
     Equipment, Item, ItemStack,
     sell_all_materials, sell_all_consumables,
-    inventory_remove
+    inventory_remove, INVENTORY_LIMIT
 )
 
 _R="\033[0m"; _B="\033[1m"
@@ -40,7 +40,7 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
         print(C(f"\n{_GOLD}{_B}╔══════════════════════════════════════════╗"))
         print(C(f"║   💰  SELL ITEMS                          ║"))
         print(C(f"╚══════════════════════════════════════════╝{_R}"))
-        print(C(f"  {_DIM}Gold: {_GOLD}{player.gold}g{_R}   Bag: {total_items}/{30} slots   "
+        print(C(f"  {_DIM}Gold: {_GOLD}{player.gold}g{_R}   Bag: {total_items}/{INVENTORY_LIMIT} slots   "
                 f"{_DIM}(equipped gear is never sold){_R}\n"))
 
         # Quick sell options
@@ -127,6 +127,11 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
             real_idx = start + idx
             if 0 <= idx < len(chunk):
                 entry = chunk[idx]
+                item_obj = entry.item if isinstance(entry, ItemStack) else entry
+                if item_obj.item_type == "god":
+                    ok = input(C(f"  {_YELL}Sell your God Potion? It revives you at 0 HP. (y/n) {_R}")).strip().lower()
+                    if ok != "y":
+                        continue
                 if isinstance(entry, ItemStack) and entry.qty > 1:
                     # Ask how many to sell
                     print(C(f"  Sell how many? (1–{entry.qty}, or 'a' for all): "), end="", flush=True)
@@ -135,6 +140,8 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
                         amt = entry.qty
                     elif amt_str.isdigit():
                         amt = min(int(amt_str), entry.qty)
+                        if amt <= 0:
+                            continue
                     else:
                         continue
                     sv = int(entry.item.sell_value * shop_sell_multiplier) * amt
@@ -145,11 +152,6 @@ def open_sell_screen(player, shop_sell_multiplier=0.5):
                     print(C(f"{_GREEN}Sold {amt}x {entry.item.name} for {_GOLD}+{sv}g{_R}!"))
                 else:
                     # Sell single item
-                    item_obj = entry.item if isinstance(entry, ItemStack) else entry
-                    if item_obj.item_type == "god":
-                        ok = input(C(f"  {_YELL}Sell your God Potion? It revives you at 0 HP. (y/n) {_R}")).strip().lower()
-                        if ok != "y":
-                            continue
                     sv = int(item_obj.sell_value * shop_sell_multiplier)
                     inv.pop(real_idx)
                     player.gold += sv

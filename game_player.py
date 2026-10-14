@@ -1,6 +1,6 @@
 import random, json, os
 from game_term import C, P, div, clr, W, H, hpbar, mpbar, box_top, box_mid, box_bot, get_size
-from game_items import Item, Equipment, item_from_dict, status_from_dict, roll_drops, ITEM_POOL
+from game_items import Item, Equipment, ItemStack, item_from_dict, status_from_dict, roll_drops, ITEM_POOL
 from game_jobs import create_job, STARTER_JOBS
 
 _R="[0m"; _B="[1m"
@@ -111,10 +111,13 @@ class Player:
         # Inventory: stacked items via inventory_add
         from game_items import inventory_add as _ia
         self.inventory = []
-        _ia(self.inventory, Item("Potion", "heal", 40, 10))
-        _ia(self.inventory, Item("Potion", "heal", 40, 10))
-        _ia(self.inventory, Item("Ether", "mana", 25, 15))
-        _ia(self.inventory, Item("God Potion", "god", 5, 500))   # starts with 1 god potion
+        # Use the canonical pool items: stacks keep the FIRST item's sell value,
+        # so off-table starters (Potion sold for 10g, shop price 8g) let every
+        # bought potion be resold at a profit.
+        _ia(self.inventory, ITEM_POOL["Potion"]())
+        _ia(self.inventory, ITEM_POOL["Potion"]())
+        _ia(self.inventory, ITEM_POOL["Ether"]())
+        _ia(self.inventory, ITEM_POOL["God Potion"]())   # starts with 1 god potion
 
         self.active_quests    = []
         self.completed_quests = []
@@ -450,6 +453,8 @@ class Player:
             return False, f"Cannot equip — requires: {', '.join(ac)}"
         if item.slot not in self.equipped:
             return False, f"{item.name} has an unknown slot ({item.slot})."
+        if item not in self.inventory:
+            return False, f"{item.name} is not in your bag."
         old = self.equipped.get(item.slot)
         self.inventory.remove(item)
         if old:
@@ -539,14 +544,17 @@ class Player:
 
     def update_quests_on_kill(self, enemy_name):
         for q in self.active_quests:
-            if q.get("type") == "kill" and q.get("target") == enemy_name:
+            req = q.get("required", q.get("required_kills", 1))
+            if (q.get("type") == "kill" and q.get("target") == enemy_name
+                    and q.get("progress", 0) < req):
                 q["progress"] = q.get("progress", 0) + 1
-                print(C(f"Quest [{q['title']}]: {q['progress']}/{q['required']}"))
+                print(C(f"Quest [{q['title']}]: {q['progress']}/{req}"))
         # Evolution quest
         if (self.evolution_quest
                 and not self.evolution_quest.get("done")
                 and self.evolution_quest.get("type") == "kill"
-                and self.evolution_quest.get("target") == enemy_name):
+                and self.evolution_quest.get("target") == enemy_name
+                and self.evolution_quest["progress"] < self.evolution_quest["required"]):
             self.evolution_quest["progress"] += 1
             p = self.evolution_quest["progress"]
             r = self.evolution_quest["required"]
@@ -576,7 +584,7 @@ class Player:
             from game_customise import tick_legendary_quest as _tlq
             _tlq(self,"guild_quest")
 
-        if earned_gold:
+        if done:   # (was `if earned_gold:` — an EXP-only reward was dropped)
             self.gold += earned_gold
             self.gain_exp(earned_exp)
             print(C(f"Rewards: +{earned_gold} gold, +{earned_exp} EXP"))
@@ -827,7 +835,14 @@ class Player:
         from game_items import inventory_add
         p.inventory = []
         for i in d.get("inventory", []):
-            inventory_add(p.inventory, item_from_dict(i))
+            entry = item_from_dict(i)
+            # Old saves hold stacks built from off-table starter items (Potion
+            # resold for 10g, shop price 8g) — clamp to the table's sell value.
+            if (isinstance(entry, ItemStack) and entry.item.name in ITEM_POOL
+                    and not isinstance(entry.item, Equipment)):
+                entry.item.sell_value = min(entry.item.sell_value,
+                                            ITEM_POOL[entry.item.name]().sell_value)
+            inventory_add(p.inventory, entry)
         p.active_quests    = d.get("active_quests", [])
         p.completed_quests = d.get("completed_quests", [])
         p.evolution_quest  = d.get("evolution_quest")

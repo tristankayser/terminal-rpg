@@ -226,7 +226,9 @@ class Item:
             # Actual effect is applied by the combat engine
             print(_C(f"Threw {self.name}!")); return True
         if self.item_type == "buff":
-            player.temp_atk_buff  = getattr(player,"temp_atk_buff",0)  + self.value
+            # Refresh rather than stack (drinking five used to give ATK+50)
+            cur = getattr(player,"temp_atk_buff",0) if getattr(player,"temp_atk_turns",0) > 0 else 0
+            player.temp_atk_buff  = max(cur, self.value)
             player.temp_atk_turns = max(getattr(player,"temp_atk_turns",0), 3)
             print(_C(f"Used {self.name}: ATK+{self.value} for 3 turns!")); return True
         print(_C("Can't use that here.")); return False
@@ -336,6 +338,13 @@ def inventory_add(inventory, item):
         raw, qty = item, 1
 
     if raw.item_type in STACKABLE_TYPES:
+        # All-or-nothing: a partial add used to return False after merging
+        # some of the qty, which duplicated items on a failed storage withdraw.
+        room = sum(MAX_STACK - s.qty for s in inventory
+                   if isinstance(s, ItemStack) and s.item.name == raw.name)
+        room += max(0, INVENTORY_LIMIT - len(inventory)) * MAX_STACK
+        if room < qty:
+            return False
         # Try to add to existing stack
         for stack in inventory:
             if isinstance(stack, ItemStack) and stack.item.name == raw.name and stack.qty < MAX_STACK:
@@ -788,8 +797,8 @@ def town_shop_stock(region_name=""):
         (Equipment("Iron Sword","weapon",atk_bonus=5,sell_value=40,rarity="common"),                                              60),
         (Equipment("Iron Staff","weapon",atk_bonus=3,mp_bonus=15,sell_value=45,rarity="common",allowed_classes=["Mage","Healer","Archmage","Arch Priest"]),  55),
         (Equipment("Short Sword","weapon",atk_bonus=6,stealth_bonus=2,sell_value=50,rarity="common",allowed_classes=["Rogue","Shadow Assassin"]),            50),
-        (Equipment("War Hammer","weapon",atk_bonus=10,def_bonus=3,sell_value=80,rarity="common",allowed_classes=["Tank","War Titan"]),                       75),
-        (Equipment("Holy Mace","weapon",atk_bonus=6,mp_bonus=10,sell_value=70,rarity="common",allowed_classes=["Healer","Arch Priest"]),                     65),
+        (Equipment("War Hammer","weapon",atk_bonus=10,def_bonus=3,sell_value=80,rarity="common",allowed_classes=["Tank","War Titan"]),                      110),
+        (Equipment("Holy Mace","weapon",atk_bonus=6,mp_bonus=10,sell_value=70,rarity="common",allowed_classes=["Healer","Arch Priest"]),                     95),
         # ── Universal armor ───────────────────────────────────────
         (Equipment("Leather Armor","armor",hp_bonus=20,def_bonus=4,sell_value=20,rarity="common"),                               50),
         (Equipment("Mage Robe","armor",hp_bonus=10,mp_bonus=40,sell_value=55,rarity="common",allowed_classes=["Mage","Healer","Archmage","Arch Priest"]),    60),

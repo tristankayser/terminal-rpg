@@ -11,7 +11,7 @@
 
 ### ⚔️ Terminal-RPG — an open‑world RPG that lives in your terminal ⚔️
 
-**Five continents. One ancient dragon. Zero graphics card required.**
+**Five continents. Three castles. One ancient dragon. Zero graphics card required.**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
@@ -34,74 +34,42 @@ recruit a party, build a base, found a clan, and *awaken* your class into its le
 | | |
 |---|---|
 | 🗺️ **Huge procedural world** | A 320×120 archipelago with 5 continents, roads, rivers, ports and fog of war. Every new game is a new map. |
+| 🏘️ **Walkable towns & ports** | Every city and port is a hand-crafted-feeling ASCII town: walk the streets, enter shops, inns, taverns and guilds, talk to townsfolk, and watch out for thieves and cutthroats in dark alleys. Day and night change who is out. |
+| 🏰 **Three castle kingdoms** | **Valdmere**, the grey-and-white magic capital with purple banners and a dignified royal court · **Duskthorn Citadel**, a demon fortress where you choose a *pact* or *war* · **Sunspire Kasbah**, a laid-back desert palace with very sharp teeth. |
+| 👑 **4 long main stories** | *The Dragon's Curse*, *The Shadow Conspiracy*, *The Lost Kingdom* and the new kingdom story *The Crown's Plea*, each 13–15 chapters over 3 acts, with choices, twists and epilogues. Plus 16 side stories. |
+| 🧭 **53 places to discover** | Watchtowers that reveal the map, shrines with permanent blessings, bandit camps, a bandit king's hideout, haunted graveyards, wizard towers, obelisk teleport network, lighthouses, frozen shipwrecks, hidden caves and more. |
+| ⚔️ **Tactical boss fights** | Bosses telegraph their next move, have shields you can **Break**, charge big attacks, change phases, summon adds and enrage. Story / Normal / Hard difficulty. |
 | 🧙 **10 classes** | Swordsman, Mage, Rogue, Tank, Healer. Each one **awakens** into a stronger form with new skills. |
-| ⚔️ **Snappy turn-based combat** | One key per turn and a live battle log. Skills, status effects, bombs, buffs, sneak attacks, boss phases. |
-| 🏰 **Multi-floor dungeons** | Fog of war, treasure chests, hidden traps, teleport pads. Every bottom floor has a boss that scales to your level. |
-| 🐉 **3 main stories + side quests** | *The Dragon's Curse*, *The Shadow Conspiracy*, *The Lost Kingdom*, plus side stories you find by exploring. |
+| 👥 **42 companions** | Common to legendary recruits (and ultra-rare *Starborn* variants) found in taverns, on the road, in dungeons and castles. Loyalty, gear, passives, and full customisation: rename them, give them titles and colours. |
+| 🎒 **277 items with ASCII icons** | Five rarities, random affixes, set gear, legendary uniques. Type `?` + number in any list to inspect an item's icon card. 86 crafting recipes. |
 | 🎨 **Character customisation** | 4 styles per class, each with its own colours and a real perk. Golden **legendary skins** come from epic quests. |
-| 👥 **Party & clans** | Recruit up to 3 of 20 companions, found your own clan and earn passive income. |
-| 🏠 **Player bases** | Buy or build a home on each continent. Upgrade bedroom, storage, workshop, garden and trophy wall. |
-| ⛏️ **Mining, crafting, trading** | Mine ore, craft 40+ recipes, barter with travelling merchants. |
-| 🥷 **Stealth** | Monsters roam the map and chase you. Sneak past them and your next fight opens with a sneak attack. |
-| 💾 **Safe saves** | 5 save slots, autosave, **Continue** from the main menu, and an emergency save if the game is interrupted. |
+| 🏠 **Player bases & clans** | Build a home on each continent, found a clan and earn income every day. |
+| ⛏️ **Mining, crafting, trading** | Mine ore, craft gear, barter with travelling merchants. |
+| 💾 **Safe saves** | 5 save slots, autosave, **Continue** from the main menu. Saves from older versions keep working. |
 | 🌍 **20 languages** | EN · DE · FR · ES · PT · IT · RU · PL · NL · SV · JA · ZH · KO · AR · TR · CS · HU · RO · FI · NO |
 
-## 📸 A peek inside
+## 📸 Screenshots
 
-> The game uses full 24-bit colour. These captures are plain text, so imagine everything in vivid colour.
+<p align="center"><img src="docs/screenshots/title.png" alt="Title screen" width="49%"> <img src="docs/screenshots/character_creation.png" alt="Character creation" width="49%"></p>
 
-**Boss battle**: your hero is drawn in the colours of the style you picked.
-```
-═══════  ⚔  BOSS BATTLE · Goblin King · Round 2  ═══════
+**Walk through every town**: shops, guilds, taverns and townsfolk, all on foot.
+<p align="center"><img src="docs/screenshots/town.png" alt="A walkable town" width="90%"></p>
 
-                                   ___/\/\/\___
-                                  |__|__|__|__|
-      ___                        ,/  o    o  \,
-     /___\    /|                ((   .-''-.   ))
-     |o o|   / /                 \\  \vvvv/  //
-     \_-_/  / /        VS       __\\_'-..-'_//__
-   __/▓▓▓\_/ /                 /   |▓▓▓▓▓▓▓▓|   \ ==
-  /_ |▓▓▓| /_/                /    |▓▓▓▓▓▓▓▓|    \
-     |_|_|  |                      |___||___|
-     /_/\_\                        (__)  (__)
-       Aria                        Goblin King
+**Valdmere, the royal city**, and the throne room of Castle Lumeris.
+<p align="center"><img src="docs/screenshots/castle_banner.png" alt="Valdmere banner" width="90%"></p>
+<p align="center"><img src="docs/screenshots/valdmere.png" alt="Valdmere city" width="49%"> <img src="docs/screenshots/throne_room.png" alt="Castle Lumeris throne room" width="49%"></p>
 
-FOE  Goblin King      HP [██████████████░░░░░░] 161/230
-YOU  Aria Lv5         HP [████████████████░░░░] 172/214  MP [██████████░░░░] 44/60
-── battle log ────────────────────────────────────────
-Aria strikes! CRITICAL! → 31 damage!
-Goblin King uses POWER STRIKE -> 42 damage!
-──────────────────────────────────────────────────────
-[1] Attack  Basic weapon strike   [2] Skill  Class skill (MP)
-[3] Item  Potion, bomb, buff   [4] Defend  Brace, take less damage
-```
+**Boss fights you can read**: intents, shields, phases and summoned adds.
+<p align="center"><img src="docs/screenshots/boss_fight.png" alt="Boss fight against Demon Lord Kharzul" width="90%"></p>
 
-**Exploring the world**: `@` is you, `P` a city, `X` a dungeon, `M` a mine, `R` ruins, lowercase letters are monsters.
-```
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~...R.........~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~S~~:::..........X:~~
-:::::TTTTTTTTTTTTTTTTTT/T//...............TTTTTTT::::~~~~~~~~~~~:..****==**********~~
-:TTTTTTTTTTTwTTTTTTTTT/Th///.............TTTTTTTTTTT::::~~~~~~~:.******==***********~
-TTTTTTTTTTTTT,,,TTTTT/TTT//.//...........TTTTTT@TTTTTTT:::~~~~::.*******==*****^^^^**
-TTTTTTTTTT,,,,,,,,,T/TRTTTT../=================PTTTTTTTTT::~~~~:.********=******^^***
-TTTTTT,,,,,,,,^,,,/,,TTTTTT.==..........TT,,,,,,,,TTTTTTTTTT::~~::*******i=*********^
-AELORIA  Forest   ▶ Greenveil [E]   ★Hear the Rumours [0/1]
-```
+<p align="center"><img src="docs/screenshots/combat.png" alt="Combat" width="49%"> <img src="docs/screenshots/item_card.png" alt="Item inspect card" width="49%"></p>
 
-**Customise your hero**: flip through styles with a live preview.
-```
-══════════════  🎨 CHARACTER CUSTOMISATION  ══════════════
-Aria the Swordsman   wearing: Default
+**The open world and its dungeons.**
+<p align="center"><img src="docs/screenshots/world_map.png" alt="World map" width="90%"></p>
+<p align="center"><img src="docs/screenshots/dungeon.png" alt="Dungeon" width="49%"> <img src="docs/screenshots/character_sheet.png" alt="Character sheet" width="49%"></p>
+<p align="center"><img src="docs/screenshots/customise.png" alt="Customisation" width="70%"></p>
 
-        ___              2/5  ██  Berserker
-       /___\    /|
-       |o o|   / /       Torn cloak, war paint, twin blades.
-       \_-_/  / /        Fear is your weapon.
-     __/▓▓▓\_/ /
-    /_ |▓▓▓| /_/         Perk: + 4 ATK  (rage-forged strikes)
-       |_|_|  |
-       /_/\_\
-```
+<sub>Screenshots are captured from the real game. Regenerate them with `python3 tools/screenshots.py` (needs `pip install pyte` and Node + Playwright; the game itself needs nothing).</sub>
 
 ---
 
@@ -157,11 +125,12 @@ Your saves always live in the `saves/` folder next to the game.
 
 ## 🎮 Your first adventure
 
-1. **New Game.** Enter a name, pick a class, choose WASD or 8‑direction movement, and pick a main story.
-2. **Visit the town next to you.** Walk onto the `P` and press **E**.
-   - 🛒 **Shop [2]**: buy a few potions (type `1x5` to buy five of item 1).
-   - 📜 **Quest Board [3]**: take a guild quest for easy gold and EXP.
-   - 🗣️ **Talk [5]**: the townsfolk know things… *(it may even advance your story)*.
+1. **New Game.** Enter a name, pick a class, choose WASD or 8‑direction movement, and pick a main story
+   (pick *The Crown's Plea* to be hired by the Kingdom of Valdmere; the kingdom is always on the map either way).
+2. **Visit the town next to you.** Walk onto the `P` and press **E**. You arrive at the gate of a walkable town.
+   - Walk into a door (`+`) to enter: 🛒 **Shop**, 🍺 **Tavern** (recruit companions), 📜 **Guild** (quests), 🛏️ **Inn**.
+   - Press **E** next to people to talk. The townsfolk know things… *(it may even advance your story)*.
+   - Dark alleys hide thieves. Press **M** for the classic town menu, **Q** to leave.
 3. **Explore.** Monsters roam as letters on the map. Fight them or sneak past.
 4. **Hit a dungeon `X`.** Three floors deep with a boss at the bottom. Bring potions!
 5. **Level up, gear up, sail away.** Ports `H` have ships to the other four continents.
@@ -183,6 +152,15 @@ Your saves always live in the `saves/` folder next to the game.
 | `M` | Discovered places | | `P` | Save game |
 | `?` | Help (+ switch movement mode) | | `Q` / `Esc` | Quit (with save prompt) |
 
+### Towns, castles & structures
+| Key | Action |
+|---|---|
+| `W A S D` / arrows | Walk (walk into doors to enter, into people to talk) |
+| `E` | Talk / use what's next to you |
+| `I` · `J` · `T` | Bag · Journal · Status |
+| `M` | Classic town menu (towns) |
+| `P` · `?` · `Q` | Save · Help & legend · Leave |
+
 ### Combat (one key per turn)
 | Key | Action |
 |---|---|
@@ -191,6 +169,10 @@ Your saves always live in the `saves/` folder next to the game.
 | `3` | 🧪 Item: potions, antidotes, Strength Draught, 💣 Fire Bomb, 💨 Smoke Bomb (guaranteed escape) |
 | `4` | 🛡️ Defend: brace and take much less damage |
 | `5` | 🏃 Flee (not possible against bosses) |
+| `T` | 🎯 Switch target when a boss has summoned adds (free action) |
+
+Watch the boss's **INTENT** line: defend against charged and guard-break moves, hit its weakness to
+break its **SHIELD**, then unload while it's stunned.
 
 ### Dungeons
 Walk around to explore. Step on `▼` to go deeper and `▲` to go back up. Stand on a teleport pad `T`
@@ -254,12 +236,17 @@ to unlock its golden skin with a crown and a big bonus.
 | `game_player.py` | Player stats, levelling, inventory, equipment, quick bag |
 | `game_art.py` | Colour ASCII sprites for heroes, monsters and bosses |
 | `game_customise.py` | Styles, legendary skins and legendary quests |
-| `game_enemies.py` | Monsters and level-scaled bosses |
+| `game_enemies.py` | Monsters and bosses (phases, shields, intents, difficulty) |
 | `game_map_enemies.py` | Roaming overworld monsters (patrol and chase AI) |
-| `game_party.py` | Companions and clans |
-| `game_stories.py` | Main stories and side stories |
+| `game_scene.py` | Walkable-map engine used by towns, castles and structures |
+| `game_towns.py` | Walkable cities and ports |
+| `game_capital.py` · `game_castles.py` | Valdmere, Duskthorn Citadel, Sunspire Kasbah and *The Crown's Plea* |
+| `game_structures.py` | 53 explorable world structures |
+| `game_party.py` · `game_recruits.py` | Companions (42), recruiting, loyalty and clans |
+| `game_stories.py` · `game_story_data.py` | Story engine, main stories, side stories and epilogues |
+| `game_icons.py` | ASCII item icons and inspect cards |
 | `game_base.py` | Player bases and the workshop |
-| `game_items.py` | Items, skills, status effects, loot and recipes |
+| `game_items.py` | 277 items, rarities, affixes, skills, status effects, loot and recipes |
 | `game_mining.py` · `game_trading.py` · `game_sell.py` | Mines, barter and selling |
 | `game_codex.py` | In-game encyclopedia and guide |
 | `game_saves.py` | Save slots and autosave |

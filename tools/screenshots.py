@@ -157,6 +157,64 @@ input()
 """, [
         ("expect", "CHARACTER STATUS"), ("wait", 0.5), ("shot", "character_sheet"),
     ]),
+    "town": ("""
+from game_world import WorldMap
+from game_towns import run_town
+""" + _HERO.format(job="Swordsman") + """
+w = WorldMap(seed=1337)
+loc = next(l for l in w.locations if l["type"] == "city")
+run_town(w, p, loc)
+""", [
+        ("wait", 2.0), ("keys", "wwww"), ("wait", 0.8), ("shot", "town"),
+    ]),
+    "castle_banner": ("""
+from game_capital import valdmere_banner
+""" + _HERO.format(job="Mage") + """
+valdmere_banner(p)
+""", [
+        ("wait", 1.5), ("shot", "castle_banner"),
+    ]),
+    "valdmere": ("""
+from game_world import WorldMap
+from game_capital import Valdmere
+""" + _HERO.format(job="Mage") + """
+w = WorldMap(seed=1337)
+loc = next(l for l in w.locations if l["type"] == "capital")
+v = Valdmere(w, p, loc)
+v.city("gate").run(p)
+""", [
+        ("wait", 2.0), ("keys", "wwwwww"), ("wait", 0.8), ("shot", "valdmere"),
+    ]),
+    "throne_room": ("""
+from game_world import WorldMap
+from game_capital import Valdmere
+""" + _HERO.format(job="Mage") + """
+w = WorldMap(seed=1337)
+loc = next(l for l in w.locations if l["type"] == "capital")
+v = Valdmere(w, p, loc)
+v.keep("gate").run(p)
+""", [
+        ("wait", 2.0), ("keys", "wwwwwwwwwwww"), ("wait", 0.8), ("shot", "throne_room"),
+    ]),
+    "boss_fight": ("""
+from game_enemies import create_boss
+from game_systems import run_combat
+""" + _HERO.format(job="Swordsman") + """
+p.gain_exp(60000); p.hp = p.max_hp
+run_combat(p, create_boss("Demon Lord Kharzul", 30))
+""", [
+        ("wait", 2.0), ("line", "1"), ("wait", 1.0), ("line", "1"), ("wait", 1.2),
+        ("shot", "boss_fight"),
+    ]),
+    "item_card": ("""
+from game_items import make_item, UNIQUE_POOL
+from game_icons import inspect_item
+""" + _HERO.format(job="Swordsman") + """
+it = make_item(sorted(UNIQUE_POOL)[0])
+inspect_item(it, p)
+""", [
+        ("wait", 1.5), ("shot", "item_card"),
+    ]),
     "customise": ("""
 """ + _HERO.format(job="Mage") + """
 from game_customise import open_customise

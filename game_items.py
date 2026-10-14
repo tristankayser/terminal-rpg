@@ -771,7 +771,7 @@ _con("Full Potion",     "heal", 200,  50, "Thick crimson syrup that knits deep w
 _con("Mega Potion",     "heal", 400, 120, "Alchemist-grade healing for veteran adventurers.", "rare")
 _con("Elixir of Life",  "heal", 999, 350, "Liquid sunrise. Heals any wound completely.", "epic", icon="elixir")
 _con("Regen Tonic",     "heal",  60,  20, "Heals 60 HP, then keeps healing for 3 turns.", "uncommon")
-_con("Bandage",         "heal",  25,   3, "Clean linen strips. Restores 25 HP.", icon="bandage")
+_con("Bandage",         "heal",  25,   2, "Clean linen strips. Restores 25 HP.", icon="bandage")
 _con("Traveller's Bread","heal", 30,   4, "Dense road bread. Restores 30 HP.", icon="food")
 _con("Honeycake",       "heal",  45,   8, "Aelorian honeycake: 45 HP plus gentle regeneration.",
      fx={"regen": (2, 6)}, icon="food", region="AELORIA")
@@ -1735,7 +1735,7 @@ CRAFTING_RECIPES = [
     _recipe("Venom Dagger",      {"Venom Fang": 3, "Shadow Cloth": 1}, "Poisons on every hit"),
     _recipe("Runic Greatsword",  {"Runic Stone": 2, "Iron Ore": 4}, "Ancient runes amplify power"),
     _recipe("Void Staff",        {"Dark Shard": 4, "Mana Stone": 3, "Feather": 2}, "Channels the void itself"),
-    _recipe("Hunting Bow",       {"Oak Heartwood": 1, "Ranger's Twine": 1}, "A yew hunting bow"),
+    _recipe("Hunting Bow",       {"Oak Heartwood": 2, "Ranger's Twine": 1}, "A yew hunting bow"),
     _recipe("Longbow",           {"Oak Heartwood": 2, "Ranger's Twine": 2, "Feather": 2}, "A tall war bow"),
     _recipe("Oak Staff",         {"Oak Heartwood": 2}, "A simple focus staff"),
     _recipe("Ember Staff",       {"Oak Heartwood": 1, "Forge Ember": 1, "Mana Stone": 1}, "A smouldering staff"),
@@ -1901,3 +1901,15 @@ def town_shop_stock(region_name=""):
 
 def shop_regions():
     return list(_SHOP_REGION)
+
+
+def economy_violations():
+    """Self-check used by the test-suite (and handy for the lead): every
+    shop listing must cost more than the shop pays back for it, in every
+    region. Returns a list of human-readable problems (empty == healthy)."""
+    problems = []
+    for region in [""] + shop_regions():
+        for it, price in town_shop_stock(region):
+            if price <= it.sell_value:
+                problems.append(f"{region or 'base'}: {it.name} costs {price}g but sells for {it.sell_value}g")
+    return problems

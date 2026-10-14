@@ -105,6 +105,7 @@ def open_encyclopedia(player=None):
         print(C(f"{_opt('5','Game Guide',         'Classes, combat, stealth, progression tips')}"))
         if player:
             print(C(f"{_opt('6','My Discoveries',    'Quests, trophies and milestones')}"))
+        print(C(f"{_opt('7','Item Compendium',    'Every item, with its icon — type a number to inspect')}"))
         print(C(f"{_opt('0','Close',              '')}"))
         ch = input(C(f"\n{_GOLD}>{_R} ")).strip()
         if ch in ("0", "", "q"): return
@@ -114,6 +115,7 @@ def open_encyclopedia(player=None):
         elif ch == "4": _material_sources()
         elif ch == "5": _game_guide()
         elif ch == "6" and player: _my_discoveries(player)
+        elif ch == "7": _item_compendium(player)
 
 
 _ZONE_LABEL = {"plains":"Plains","forest":"Forest","mountain":"Mountain","desert":"Desert",
@@ -164,24 +166,93 @@ def _bestiary():
 
 
 def _shop_directory():
-    from game_items import town_shop_stock
+    from game_items import town_shop_stock, shop_regions, item_glyph, describe_effect
     base = town_shop_stock("")
+
+    def row(item, price):
+        return (f"  {item_glyph(item)} {item.rarity_col()}{item.name:<22}{_R} "
+                f"{_DIM}{describe_effect(item)[:34]:<34}{_R} {_GOLD}{price}g{_R}")
+
     lines = [f"{_GOLD}{_B}Every town{_R}"]
     for item, price in base:
-        stat = item.stat_line() if hasattr(item, "stat_line") else \
-               ("+%d HP" % item.value if item.item_type == "heal" else
-                "+%d MP" % item.value if item.item_type == "mana" else item.item_type)
-        lines.append(f"  {_WHITE}{item.name:<20}{_R} {_DIM}{stat:<26}{_R} {_GOLD}{price}g{_R}")
-    for region in ("AELORIA", "IRONSPIRE", "FROSTHEIM", "ASH SANDS", "SOUTH ISLES"):
+        lines.append(row(item, price))
+    for region in shop_regions():
         extra = town_shop_stock(region)[len(base):]
         lines.append("")
-        lines.append(f"{_GOLD}{_B}{region} only{_R}")
+        label = region.title() if region in ("VALDMERE", "SUNSPIRE", "DUSKTHORN") else region
+        lines.append(f"{_GOLD}{_B}{label} only{_R}")
         for item, price in extra:
-            stat = item.stat_line() if hasattr(item, "stat_line") else \
-                   ("+%d HP" % item.value if item.item_type == "heal" else
-                    "+%d MP" % item.value if item.item_type == "mana" else item.item_type)
-            lines.append(f"  {_WHITE}{item.name:<20}{_R} {_DIM}{stat:<26}{_R} {_GOLD}{price}g{_R}")
+            lines.append(row(item, price))
     _pager("SHOP DIRECTORY", lines)
+
+
+# ── Item compendium (every item, with its icon on request) ────────
+_COMPENDIUM_GROUPS = [
+    ("Weapons",          ("weapon",)),
+    ("Armour",           ("armor", "helmet", "shield", "cloak")),
+    ("Rings & amulets",  ("ring", "amulet")),
+    ("Potions & remedies", ("potion",)),
+    ("Foods & tonics",   ("food",)),
+    ("Bombs & scrolls",  ("bomb",)),
+    ("Materials",        ("material",)),
+    ("Key items",        ("key",)),
+]
+
+
+def _compendium_entries():
+    """[(group label, [items])] built from the live item pools."""
+    from game_items import (ITEM_POOL, SET_POOL, UNIQUE_POOL, KEY_ITEMS,
+                            item_category, rarity_rank)
+    items = []
+    for pool in (ITEM_POOL, SET_POOL, UNIQUE_POOL, KEY_ITEMS):
+        for fn in pool.values():
+            try:
+                items.append(fn())
+            except Exception:
+                pass
+    out = []
+    for label, cats in _COMPENDIUM_GROUPS:
+        group = [it for it in items if item_category(it) in cats]
+        group.sort(key=lambda it: (rarity_rank(getattr(it, "rarity", "common")), it.name))
+        if group:
+            out.append((label, group))
+    return out
+
+
+def _item_compendium(player=None):
+    from game_items import item_glyph, describe_effect
+    from game_icons import inspect_item, parse_inspect
+    groups = _compendium_entries()
+    flat, lines = [], []
+    for label, group in groups:
+        lines.append(f"{_GOLD}{_B}{label}{_R}  {_DIM}({len(group)}){_R}")
+        for it in group:
+            flat.append(it)
+            set_tag = f" {_PURP}[{it.set_name}]{_R}" if getattr(it, "set_name", None) else ""
+            lines.append(f"  {_GOLD}{len(flat):>3}{_R} {item_glyph(it)} {it.rarity_col()}{it.name:<26}{_R}"
+                         f" {_DIM}{describe_effect(it)[:40]}{_R}{set_tag}")
+        lines.append("")
+    per = max(8, H() - 9)
+    page, pages = 0, max(1, (len(lines) + per - 1) // per)
+    while True:
+        _clear()
+        print(C(f"\n{_CYAN}{_B}════  ITEM COMPENDIUM  ════{_R}  {_DIM}{len(flat)} items · Page {page+1}/{pages}{_R}\n"))
+        for ln in lines[page*per:(page+1)*per]:
+            print(C(ln))
+        nav = []
+        if page + 1 < pages: nav.append(f"{_GOLD}[N]{_R}{_DIM} Next{_R}")
+        if page > 0:         nav.append(f"{_GOLD}[P]{_R}{_DIM} Prev{_R}")
+        nav.append(f"{_GOLD}[#]{_R}{_DIM} Inspect{_R}")
+        nav.append(f"{_GOLD}[0]{_R}{_DIM} Back{_R}")
+        ch = input(C("   ".join(nav) + f"   {_GOLD}>{_R} ")).strip().lower()
+        n = parse_inspect(ch, len(flat))
+        if n is None and ch.isdigit() and 1 <= int(ch) <= len(flat):
+            n = int(ch)
+        if n is not None:
+            inspect_item(flat[n - 1], player)
+        elif ch == "n" and page + 1 < pages: page += 1
+        elif ch == "p" and page > 0:         page -= 1
+        elif ch in ("0", "q", ""):           return
 
 
 def _crafting_guide():

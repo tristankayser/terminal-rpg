@@ -747,12 +747,18 @@ def open_customise(player):
                 f"{_GOLD}[1-{len(options)}]{_R} jump")
         if lskin and not unlocked and not active_lq:
             keys += f"   {_GOLD}[Q]{_R} start legendary quest"
+        if getattr(getattr(player, "party", None), "roster", None):
+            keys += f"   {_GOLD}[P]{_R} companions"
         keys += f"   {_GOLD}[0]{_R} back"
         print(C(keys))
         ch = input(C(f"{_GOLD}>{_R} ")).strip().lower()
 
         if ch in ("0", "b", "x"):
             return
+        if ch == "p" and getattr(getattr(player, "party", None), "roster", None):
+            from game_party import customise_menu
+            customise_menu(player)
+            continue
         if ch in ("a", "<", "4a"):
             sel = (sel - 1) % len(options); continue
         if ch in ("d", ">"):

@@ -747,7 +747,7 @@ _DEFS = [
        bio="Kharzul's own champion, bound by the pact to fight at your side. Honourable in a terrifying way.",
        passive="hellfire_blade", traits=["brave", "iron_jaw"], likes=["battle", "boss", "honesty", "demons"],
        dislikes=["faith", "kindness"], gifts=["Obsidian Shard", "Dark Shard", "Obsidian Plate"],
-       recruit=dict(flag="demon_pact", flag_text="Seal the pact with Demon Lord Kharzul", min_level=12),
+       recruit=dict(flag="demon_pact", flag_text="Seal the pact with Demon Lord Kharzul", min_level=10),
        cost=0, mod=dict(hp=20, atk=3, df=2),
        signature=dict(name="Infernal Verdict", effect="inferno"),
        alt=dict(label="Pactbreaker Armour", accent=(255, 140, 30)),

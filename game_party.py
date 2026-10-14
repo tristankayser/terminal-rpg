@@ -1159,6 +1159,7 @@ class Party:
             self._battle_ref = enemy
             self._round = 1
             self._acted = {comp.id}
+            self.refresh(player)
             self._battle_start(player, enemy)
             self._round_effects(player)
             return
@@ -1316,6 +1317,7 @@ class Party:
         """One-off loyalty reactions to big choices stored in player.flags
         (e.g. the demon pact): companions who dislike demons are appalled."""
         f = _flags(player)
+        n = 0
         for flag, topic, label in (("demon_pact", "demons", "your pact with the demon lord"),):
             if not f.get(flag):
                 continue
@@ -1325,19 +1327,24 @@ class Party:
                     continue
                 c.flags[key] = True
                 r = c.reaction(topic)
+                n += 1 if r else 0
                 if r < 0:
                     c.change_affinity(-20)
                     print(C(f"{c.tag()} {_RED}is appalled by {label}.{_R}"))
                 elif r > 0:
                     c.change_affinity(10)
                     print(C(f"{c.tag()} {_GREEN}approves of {label}.{_R}"))
+        return n
 
     def _check_departures(self, player=None):
+        gone = []
         for c in list(self.roster):
             if c.affinity <= LEAVE_AT:
                 self.release(c.id)
                 self.departed[c.id] = current_day(player) if player is not None else 0
                 print(C(f"{_RED}{_B}{c.name} leaves you.{_R} {_DIM}\"{c.line('leave')}\"{_R}"))
+                gone.append(c.id)
+        return gone
 
     def rest_all(self, full=True, pct=100):
         for c in self.roster:
@@ -1659,6 +1666,8 @@ def _offer_screen(player, cid, cost=None, reason=None, starborn=None):
     d = COMPANION_DEFS[cid]
     party = _party(player)
     day = current_day(player)
+    if d["spawn"].get("type") == "story":
+        reason = reason or "story"
     waive = reason in ("prisoner", "story")
     if starborn is None:
         starborn = is_starborn(getattr(player, "name", "hero"), cid, day)
@@ -2048,8 +2057,8 @@ def recruit_menu(player, town_name=""):
     party = _party(player)
     in_town = bool(town_name)
     try:
-        party.react_to_world(player)
-        party._check_departures(player)
+        if party.react_to_world(player) or party._check_departures(player):
+            _pause()
     except Exception:
         pass
     while True:

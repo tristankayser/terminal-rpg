@@ -1280,8 +1280,16 @@ class WorldMap:
             f"{paint('X')} Dungeon   {paint('R')} Ruins   {paint('M')} Mine   {paint('V')} Dragon Cave",
             f"{paint('.')} Plains   {paint('T')} Forest   {paint('^')} Mountain   {paint('*')} Snow",
             f"{paint(',')} Hills   {paint(':')} Beach   {paint('~')} Ocean   {paint('=')} Road",
+        ]
+        # Castles and world structures registered by feature modules
+        places = [f"{paint(g)} {n}" for g, n in TILE_NAMES.items() if g in TILE]
+        for i in range(0, len(places), 4):
+            lines_h.append("   ".join(places[i:i+4]))
+        lines_h += [
             "",
             f"{C_CYAN}{B_}KEY SYSTEMS{R_}",
+            f"{C_GOLD}Towns & castles{R_}  — Walk the streets, enter doors, talk to people. Mind dark alleys.",
+            f"{C_TEAL}Structures{R_}  — Towers, shrines, camps, caves… each first visit is a discovery.",
             f"{C_ORAN}Mines [M]{R_}  — Enter to mine ore and gold. Watch for cave-ins!",
             f"{C_RED}Dragon Cave [V]{R_}  — Hidden in the highest Iron Peaks. Slay Vaeltharion.",
             f"{C_TEAL}Ships [S]{R_}  — Board at ports to sail between continents.",

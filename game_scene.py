@@ -647,8 +647,11 @@ class Scene:
         pad = " " * max(0, (cols - vw) // 2)
         out = []
         sub = f"  {C_DIM}{self.subtitle}{R_}" if self.subtitle else ""
-        out.append(pad + f"{self.colour}{B_}══ {self.title} ══{R_}{sub}")
-        out.append(pad + self._status_line(player))
+        # Header lines can be wider than a small map: shift them left so they
+        # never wrap past the terminal edge.
+        for line in (f"{self.colour}{B_}══ {self.title} ══{R_}{sub}", self._status_line(player)):
+            hp = min(len(pad), max(0, cols - 1 - _vis(line)))
+            out.append(" " * hp + line)
         out.append(pad + f"{C_DIM}{'─' * vw}{R_}")
 
         # entity + label overlays
